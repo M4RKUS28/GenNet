@@ -11,35 +11,42 @@ extern std::uniform_real_distribution<double> distribution;
 class Neuron;
 typedef  Neuron** Layer;
 
-enum Aggregationsfunktion  {
-    SUM = 0,
-    AVG,
-    MAX,
-    MIN,
-};
-
-enum Aktivierungsfunktion  {
-    TANH = 0,
-    RELU,
-    SMAX
-};
-
 
 struct LayerType {
-    LayerType()
-    {
 
-    }
-    LayerType(    unsigned neuronCount,
-              Aggregationsfunktion aggrF,
-              Aktivierungsfunktion aktiF)
-        : neuronCount(neuronCount), aggrF(aggrF), aktiF(aktiF)
-    {
+    enum Aggregationsfunktion  {
+        SUM = 0,
+        AVG,
+        MAX,
+        MIN,
+    } aggrF;
 
-    }
+    enum Aktivierungsfunktion  {
+        TANH = 0,
+        RELU,
+        SMAX
+    } aktiF;
+
     unsigned neuronCount;
-    Aggregationsfunktion aggrF;
-    Aktivierungsfunktion aktiF;
+
+    LayerType()  {}
+    LayerType(unsigned neuronCount,  Aggregationsfunktion aggrF,   Aktivierungsfunktion aktiF)
+        : aggrF(aggrF), aktiF(aktiF), neuronCount(neuronCount) { }
+
+    std::string aggregationsfunktionToString() {
+        if (aggrF == SUM) return "SUM";
+        else if (aggrF == AVG) return "AVG";
+        else if (aggrF == MAX) return "MAX";
+        else if (aggrF == MIN) return "MIN";
+        else return "Unknown";
+    }
+
+    std::string aktivierungsfunktionToString() {
+        if (aktiF == TANH) return "TANH";
+        else if (aktiF == RELU) return "RELU";
+        else if (aktiF == SMAX) return "SMAX";
+        else return "Unknown";
+    }
 };
 
 class Neuron
@@ -64,15 +71,14 @@ public:
 
 
 
-    Aggregationsfunktion getAggrF() const;
+    LayerType::Aggregationsfunktion getAggrF() const;
 
-    Aktivierungsfunktion getAktiF() const;
+    LayerType::Aktivierungsfunktion getAktiF() const;
 
 private:
     double activationFunction(const double &x, const double &exp_sum = 0) const;
     double randomWeight();
-    Aggregationsfunktion aggrF;
-    Aktivierungsfunktion aktiF;
+    LayerType layerType;
 
     unsigned conections_count;
     double result_Aggregationsfunktion = 0;
