@@ -34,7 +34,7 @@ public:
     bool createCopyFrom(const Net *origin);
     std::vector<LayerType> getTopology() const;
 
-    void mutate(const double & mutation_rate);
+    void mutate(const double & mutation_rate, const double & mutation_range = 1.0 );
 
     double getConWeight(const unsigned int &layer, const unsigned int &neuronFrom, const unsigned int &neuronTo) const;
     double getNeuronValue(const unsigned int &layer, const unsigned int &neuron) const;

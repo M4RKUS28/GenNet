@@ -26,11 +26,14 @@ double Neuron::randomWeight()
     return distribution(generator);
 }
 
-void Neuron::mutate(double rate)
+std::mt19937 gen(std::random_device{}());
+std::normal_distribution<double> randomGaussianDistribution(0.0, 1.0);
+
+void Neuron::mutate(const double &rate, const double &m_range)
 {
     for(unsigned i = 0; i < conections_count; i++)
         if( std::abs(distribution(generator)) < rate) {
-            m_outputWeights[i] += randomWeight() / 5.0;
+            m_outputWeights[i] += randomGaussianDistribution(gen) * m_range;
             if(m_outputWeights[i] < -1)
                 m_outputWeights[i] = -1;
             else if(m_outputWeights[i] > 1)

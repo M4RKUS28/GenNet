@@ -315,12 +315,12 @@ std::vector<LayerType> Net::getTopology() const
 }
 
 
-void Net::mutate(const double &mutation_rate)
+void Net::mutate(const double &mutation_rate, const double &mutation_range)
 {
     for (unsigned layerNum = 0; layerNum < topology.size() - 1/**???*/; ++layerNum) {
         for (unsigned neuronNum = 0; neuronNum < topology.at(layerNum).neuronCount + 1 /*bias*/; ++neuronNum) {
             for(unsigned c = 0; c < this->m_layers[layerNum][neuronNum]->getConections_count(); c ++) {
-                this->m_layers[layerNum][neuronNum]->mutate(mutation_rate);
+                this->m_layers[layerNum][neuronNum]->mutate(mutation_rate, mutation_range);
             }
         }
     }

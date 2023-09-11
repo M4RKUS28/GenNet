@@ -8,6 +8,11 @@
 
 extern std::mt19937/*minstd_rand*/ generator;
 extern std::uniform_real_distribution<double> distribution;
+
+extern std::mt19937 gen;
+extern std::normal_distribution<double> randomGaussianDistribution;
+
+
 class Neuron;
 typedef  Neuron** Layer;
 
@@ -58,7 +63,7 @@ public:
 
     void aggregation(const Layer &prevLayer, const unsigned & neuron_count);
     void activation(const double &exp_sum = 0.0);
-    void mutate(double rate);
+    void mutate(const double &rate, const double & m_range);
 
     double getOutputVal() const;
     unsigned int getConections_count() const;
