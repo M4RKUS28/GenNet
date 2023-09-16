@@ -1,18 +1,18 @@
 #include "net.h"
 
 
-Net::Net(const std::vector<LayerType> &topology)
+Net::Net(const std::vector<LayerType> &topology, const double &init_range)
     :  topology(topology)
 {
     // create Net
-    init();
+    init(init_range);
 }
 
-Net::Net(const std::string &s_topology)
+Net::Net(const std::string &s_topology, const double &init_range)
     :  topology(getTopologyFromStr(s_topology))
 {
     // create Net
-    init();
+    init(init_range);
 }
 
 
@@ -31,7 +31,7 @@ Net::Net(const std::string filename, bool &ok)
 }
 
 
-void Net::init()
+void Net::init(const double &init_range)
 {
     if(topology.size() < 2) {
         std::cerr << "Invalid net: Topology-size is to small or 0: " << topology.size() << std::endl;
@@ -48,12 +48,16 @@ void Net::init()
         unsigned anzahl_an_neuronen_des_naechsten_Layers = (layerNum == topology.size() - 1) ? 0 : topology.at(layerNum + 1).neuronCount;
 
         for (unsigned neuronNum = 0; neuronNum < neuron_count; ++neuronNum)  {
-            m_layers[layerNum][neuronNum] = new Neuron(anzahl_an_neuronen_des_naechsten_Layers, neuronNum, topology.at(layerNum));
+            m_layers[layerNum][neuronNum] = new Neuron(anzahl_an_neuronen_des_naechsten_Layers, neuronNum, topology.at(layerNum), init_range);
         }
 
         /*BIAS*/
         m_layers[layerNum][topology.at(layerNum).neuronCount]->setOutputVal(1);
     }
+
+
+    m_recentAverangeSmoothingFactor = 0.2;
+    m_recentAverrageError = 0.0;
 }
 Net::~Net() {
 
@@ -315,12 +319,12 @@ std::vector<LayerType> Net::getTopology() const
 }
 
 
-void Net::mutate(const double &mutation_rate)
+void Net::mutate(const double &mutation_rate, const double &mutation_range)
 {
     for (unsigned layerNum = 0; layerNum < topology.size() - 1/**???*/; ++layerNum) {
         for (unsigned neuronNum = 0; neuronNum < topology.at(layerNum).neuronCount + 1 /*bias*/; ++neuronNum) {
             for(unsigned c = 0; c < this->m_layers[layerNum][neuronNum]->getConections_count(); c ++) {
-                this->m_layers[layerNum][neuronNum]->mutate(mutation_rate);
+                this->m_layers[layerNum][neuronNum]->mutate(mutation_rate, mutation_range);
             }
         }
     }
@@ -355,28 +359,64 @@ unsigned int Net::neuronCountAt(const unsigned int &layer) const
     return getTopology().at(layer).neuronCount;
 }
 
+double Net::recentAverrageError() const
+{
+    return m_recentAverrageError;
+}
+
 void Net::feedForward(const double *input)
 {
 
     for (unsigned i = 0; i < neuronCountAt(0); i++) {
         m_layers[0][i]->setOutputVal( input[i] );
     }
+    for (unsigned layerNum = 1; layerNum < layerCount(); ++layerNum) {
+        Layer &prevLayer = m_layers[layerNum - 1];
+        Layer &thisLayer = m_layers[layerNum];
+        bool is_softmax = thisLayer[0]->getAktiF() == LayerType::Aktivierungsfunktion::SMAX;
 
-    for (unsigned layerNum = 1; layerNum < layerCount() ; ++layerNum) {
+        double maxActivation = -std::numeric_limits<double>::infinity(); // Initialize maxActivation to negative infinity
+        double logSumExp = 0.0; // Initialize logSumExp to zero
+        double sumexp = 0.0;
+
+        for (unsigned n = 0; n < neuronCountAt(layerNum); ++n) {
+            thisLayer[n]->aggregation(prevLayer, neuronCountAt(layerNum - 1) + 1); // Assuming aggregation does not affect maxActivation
+            maxActivation = std::max(maxActivation, thisLayer[n]->getSumme_Aggregationsfunktion());
+        }
+
+        if(is_softmax) {
+            for (unsigned n = 0; n < neuronCountAt(layerNum); ++n) {
+                sumexp += std::exp(thisLayer[n]->getSumme_Aggregationsfunktion());
+                logSumExp += std::exp(thisLayer[n]->getSumme_Aggregationsfunktion() - maxActivation);
+            }
+        }
+        logSumExp = maxActivation + std::log(logSumExp);
+
+        // Now you can use sum_of_expo for softmax operation
+        for (unsigned n = 0; n < neuronCountAt(layerNum); ++n) {
+            thisLayer[n]->activation(sumexp, logSumExp); // Subtract sum_of_expo
+        }
+    }
+/*    for (unsigned layerNum = 1; layerNum < layerCount() ; ++layerNum) {
         Layer &prevLayer = m_layers[layerNum -1];
         Layer &thisLayer = m_layers[layerNum   ];
         double sum_of_expo = 0.0;
         bool is_softmax = thisLayer[0]->getAktiF() == LayerType::Aktivierungsfunktion::SMAX;
 
-        for (unsigned n = 0; n < neuronCountAt(layerNum) /*- 1*/ /* KEIN BIOS???!!! */; ++n) {
-            thisLayer[n]->aggregation(prevLayer, neuronCountAt(layerNum -1) + 1 /*BIOS*/);
+        for (unsigned n = 0; n < neuronCountAt(layerNum) / *- 1* / / * KEIN BIOS???!!! * /; ++n) {
+            thisLayer[n]->aggregation(prevLayer, neuronCountAt(layerNum -1) + 1 / *BIOS* /);
             if(is_softmax)
                 sum_of_expo += std::exp( thisLayer[n]->getSumme_Aggregationsfunktion() );
         }
-        for (unsigned n = 0; n < neuronCountAt(layerNum) /*- 1*/ /* KEIN BIOS???!!! */; ++n) {
+
+        if(sum_of_expo > 999999999.9)
+            sum_of_expo = 999999999.9;
+
+        for (unsigned n = 0; n < neuronCountAt(layerNum) / *- 1* / / * KEIN BIOS???!!! * /; ++n) {
             thisLayer[n]->activation(sum_of_expo);
         }
     }
+*/
 }
 
 void Net::getResults(double *output) const
@@ -384,5 +424,50 @@ void Net::getResults(double *output) const
     unsigned outputlayer = layerCount() - 1;
     for (unsigned n = 0; n < neuronCountAt(outputlayer); ++n)  {
         output[n] = m_layers[outputlayer][n]->getOutputVal();
+    }
+}
+
+
+void Net::backProp(double *targetVals, const double & eta, const double & alpha, const double &range_max)
+{
+    Layer & outputLayer = m_layers[ this->layerCount() - 1]; // start from behind !
+    unsigned output_neuron_count_ohne_bias =  neuronCountAt( this->layerCount() - 1 ) /*MACH ICHWEG!!!!! - 1*/ ;
+    m_error = 0.0;
+
+    for (unsigned n = 0; n < output_neuron_count_ohne_bias; ++n) {
+        double delta = targetVals[n] - outputLayer[n]->getOutputVal();
+        m_error += delta * delta;
+    }
+    m_error /= (double)output_neuron_count_ohne_bias;
+    m_error = sqrt(m_error);
+    m_recentAverrageError = (m_recentAverrageError * m_recentAverangeSmoothingFactor + m_error) / (m_recentAverangeSmoothingFactor + 1.0);
+
+
+    // Calculate output layer gradiants
+    for (unsigned n = 0; n < output_neuron_count_ohne_bias; ++n)
+    {
+        outputLayer[n]->calcOutputGradients(targetVals[n]);
+    }
+
+    //Calculate gradients on hidden layers: starts with max -2, because max -1 is last and wee dont need the output layer, so -2, and stop with 1: no inputl
+    for (unsigned long Layernum = layerCount() - 2; Layernum > 0; --Layernum)
+    {
+        Layer & hidenLayer = m_layers[(Layernum)];
+        Layer & nextLayer = m_layers[(Layernum + 1)];
+        for (unsigned n = 0; n < neuronCountAt(Layernum) + 1; ++n) {
+            hidenLayer[n]->calcHiddenGradients(nextLayer, neuronCountAt(Layernum + 1) + 1);
+        }
+    }
+
+    //gewichte anpassen
+    for (unsigned long Layernum = layerCount() -1 ; Layernum > 0; --Layernum)
+    {
+        Layer & layer = m_layers[Layernum];
+        Layer & prevLayer = m_layers[Layernum -1];
+
+        for (unsigned n = 0; n < neuronCountAt(Layernum) + 1; ++n)
+        {
+            layer[n]->updateInputWeights(prevLayer, neuronCountAt(Layernum -1) + 1, eta, alpha, range_max);
+        }
     }
 }
