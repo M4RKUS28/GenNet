@@ -15,15 +15,15 @@ typedef Neuron** Layer;
 class Net
 {
 public:
-    Net(const std::string &topology, const double &init_range = 1.0);
-    Net(const std::vector<LayerType> &topology, const double &init_range = 1.0);
-    Net(const Net *other);
-    Net(const std::string filename, bool &ok);
+    Net(const std::string &topology, const double &init_range = 0.01, const bool & enable_batch_learning = true);
+    Net(const std::vector<LayerType> &topology, const double &init_range = 0.01, const bool & enable_batch_learning = true);
+    Net(const Net *other, const double &init_range = 0.01, const bool & enable_batch_learning = true);
+    Net(const std::string filename, bool &ok, const bool & enable_batch_learning = true);
     ~Net();
 
     //load store net -> iofstreams
     bool save_to(const std::string &path);
-    bool load_from(const std::string &path);
+    bool load_from(const std::string &path, const bool & enable_batch_learning = true);
 
     //topology stuff
     std::vector<LayerType> getTopology() const;
@@ -36,7 +36,8 @@ public:
     //>>out
     void getResults(double *output) const;
     //~optimizer
-    void backProp(double * targetVals, const double &eta, const double &alpha, const double &range_max = 1.0);
+    void backProp(double * targetVals, const double &eta, const double &alpha, const bool &batchLearning = false);
+    void applyBatch();
     void mutate(const double & mutation_rate, const double & mutation_range = 1.0 );
 
     //make copy from other
@@ -60,7 +61,7 @@ private:
     double m_recentAverrageError;
 
 protected:
-    void init(const double &init_range = 1.0);
+    void init(const double &init_range = 1.0, const bool &enable_batch_learning = true);
 };
 
 

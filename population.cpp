@@ -35,8 +35,10 @@ void Population::evolve(const unsigned int &best, const double mutation_rate, co
     for(unsigned i = 0; i < n_count / 2; i++) {
         if(i == best)
             continue;
+
         if(nets[i]->createCopyFrom(nets[best]) == false )
             perror("Create copy failed failed!");
+
         nets[i]->mutate(mutation_rate, mutation_range);
     }
 
@@ -53,8 +55,10 @@ void Population::evolve(const unsigned int &best, const double mutation_rate, co
         int num = idistribution(igenerator);
         if(i == best || (unsigned)num == i)
             continue;
+
         if(!nets[i]->createCopyFrom(nets[num]))
             perror("Create copy failed failed!");
+
         nets[i]->mutate(0.01, 0.2);
     }
 
@@ -62,9 +66,11 @@ void Population::evolve(const unsigned int &best, const double mutation_rate, co
     for(unsigned i = part * 3; i < n_count; i++) {
         if(i == best)
             continue;
+
         if(!nets[i]->createCopyFrom(nets[best]))
             perror("Create copy failed failed!");
         nets[i]->mutate(0.03, 0.3);
+
     }
 
 

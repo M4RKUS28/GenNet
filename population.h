@@ -9,7 +9,9 @@
 class Population
 {
 public:
+
     Population(const std::string &topology, const unsigned &size, const double & init_range = 0.1);
+
     ~Population();
 
     void evolve(const unsigned & best, const double mutation_rate, const double mutation_range = 1.0);

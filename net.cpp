@@ -1,37 +1,37 @@
 #include "net.h"
 
 
-Net::Net(const std::vector<LayerType> &topology, const double &init_range)
+Net::Net(const std::vector<LayerType> &topology, const double &init_range, const bool &enable_batch_learning)
     :  topology(topology)
 {
     // create Net
-    init(init_range);
+    init(init_range, enable_batch_learning);
 }
 
-Net::Net(const std::string &s_topology, const double &init_range)
+Net::Net(const std::string &s_topology, const double &init_range, const bool &enable_batch_learning)
     :  topology(getTopologyFromStr(s_topology))
 {
     // create Net
-    init(init_range);
+    init(init_range, enable_batch_learning);
 }
 
 
-Net::Net(const Net *other)
+Net::Net(const Net *other, const double &init_range, const bool &enable_batch_learning)
     : Net(other->getTopology())
 {
     // create Net
-    init();
+    init(init_range, enable_batch_learning);
     // copy Net
     createCopyFrom(other);
 }
 
-Net::Net(const std::string filename, bool &ok)
+Net::Net(const std::string filename, bool &ok, const bool &enable_batch_learning)
 {
-    ok = load_from(filename);
+    ok = load_from(filename, enable_batch_learning);
 }
 
 
-void Net::init(const double &init_range)
+void Net::init(const double &init_range, const bool & enable_batch_learning)
 {
     if(topology.size() < 2) {
         std::cerr << "Invalid net: Topology-size is to small or 0: " << topology.size() << std::endl;
@@ -48,7 +48,7 @@ void Net::init(const double &init_range)
         unsigned anzahl_an_neuronen_des_naechsten_Layers = (layerNum == topology.size() - 1) ? 0 : topology.at(layerNum + 1).neuronCount;
 
         for (unsigned neuronNum = 0; neuronNum < neuron_count; ++neuronNum)  {
-            m_layers[layerNum][neuronNum] = new Neuron(anzahl_an_neuronen_des_naechsten_Layers, neuronNum, topology.at(layerNum), init_range);
+            m_layers[layerNum][neuronNum] = new Neuron(anzahl_an_neuronen_des_naechsten_Layers, neuronNum, topology.at(layerNum), init_range, enable_batch_learning);
         }
 
         /*BIAS*/
@@ -56,7 +56,7 @@ void Net::init(const double &init_range)
     }
 
 
-    m_recentAverangeSmoothingFactor = 0.2;
+    m_recentAverangeSmoothingFactor = 0.0009;
     m_recentAverrageError = 0.0;
 }
 Net::~Net() {
@@ -101,7 +101,7 @@ bool Net::save_to(const std::string &filename)
 }
 
 
-bool Net::load_from(const std::string &filename)
+bool Net::load_from(const std::string &filename, const bool &enable_batch_learning)
 {
     //layerCount() // 4
     std::ifstream inputFile(filename);
@@ -128,7 +128,7 @@ bool Net::load_from(const std::string &filename)
                     return false;
                 }
                 // Create Neurons....
-                init();
+                init(0.0, enable_batch_learning);
 
                 // Load Weights.... ->
             }
@@ -214,8 +214,8 @@ std::vector<LayerType> Net::getTopologyFromStr(const std::string &top)
                 //Aggregationsfunktion
             } else if(count == 1) {
 
-                if(part_s.length() != 3) {
-                    std::cerr << "Invalid length Aggregationsfunktion: " << part_s << std::endl;
+                if(part_s != "INPUT" && part_s.length() != 3 ) {
+                    std::cerr << "Invalid length Aggregationsfunktion : " << part_s << std::endl;
                     break;
                 } else {
                     if(part_s == "SUM")
@@ -226,6 +226,8 @@ std::vector<LayerType> Net::getTopologyFromStr(const std::string &top)
                         lt.aggrF = LayerType::Aggregationsfunktion::MIN;
                     else if(part_s == "AVG")
                         lt.aggrF = LayerType::Aggregationsfunktion::AVG;
+                    else if(part_s == "INPUT")
+                        lt.aggrF = LayerType::Aggregationsfunktion::INPUT_LAYER;
                     else {
                         std::cerr << "Invalid Aggregationsfunktion: " << part_s << std::endl;
                         break;
@@ -235,7 +237,7 @@ std::vector<LayerType> Net::getTopologyFromStr(const std::string &top)
                 // Aktivierungsfunktion
             } else if(count == 2) {
 
-                if(part_s.length() != 4) {
+                if((part_s != "LAYER" && part_s != "IDENTITY" && part_s != "SOFTPLUS" && part_s != "LEAKYRELU" && part_s != "SIGMOID") && part_s.length() != 4) {
                     std::cerr << "Invalid Aktivierungsfunktion: " << part_s << std::endl;
                     break;
                 }else {
@@ -245,6 +247,16 @@ std::vector<LayerType> Net::getTopologyFromStr(const std::string &top)
                         lt.aktiF = LayerType::Aktivierungsfunktion::RELU;
                     else if(part_s == "SMAX")
                         lt.aktiF = LayerType::Aktivierungsfunktion::SMAX;
+                    else if(part_s == "LAYER") /*INPUT_LAYER*/
+                        lt.aktiF = LayerType::Aktivierungsfunktion::NONE;
+                    else if(part_s == "IDENTITY") /*INPUT_LAYER*/
+                        lt.aktiF = LayerType::Aktivierungsfunktion::IDENTITY;
+                    else if(part_s == "SOFTPLUS") /*INPUT_LAYER*/
+                        lt.aktiF = LayerType::Aktivierungsfunktion::SOFTPLUS;
+                    else if(part_s == "LEAKYRELU") /*INPUT_LAYER*/
+                        lt.aktiF = LayerType::Aktivierungsfunktion::LEAKYRELU;
+                    else if(part_s == "SIGMOID") /*INPUT_LAYER*/
+                        lt.aktiF = LayerType::Aktivierungsfunktion::SIGMOID;
                     else {
                         std::cerr << "Invalid Aktivierungsfunktion: " << part_s << std::endl;
                         break;
@@ -366,57 +378,36 @@ double Net::recentAverrageError() const
 
 void Net::feedForward(const double *input)
 {
-
     for (unsigned i = 0; i < neuronCountAt(0); i++) {
         m_layers[0][i]->setOutputVal( input[i] );
     }
+
     for (unsigned layerNum = 1; layerNum < layerCount(); ++layerNum) {
         Layer &prevLayer = m_layers[layerNum - 1];
         Layer &thisLayer = m_layers[layerNum];
-        bool is_softmax = thisLayer[0]->getAktiF() == LayerType::Aktivierungsfunktion::SMAX;
 
+        bool is_softmax = thisLayer[0]->getAktiF() == LayerType::Aktivierungsfunktion::SMAX;
         double maxActivation = -std::numeric_limits<double>::infinity(); // Initialize maxActivation to negative infinity
         double logSumExp = 0.0; // Initialize logSumExp to zero
-        double sumexp = 0.0;
 
         for (unsigned n = 0; n < neuronCountAt(layerNum); ++n) {
-            thisLayer[n]->aggregation(prevLayer, neuronCountAt(layerNum - 1) + 1); // Assuming aggregation does not affect maxActivation
-            maxActivation = std::max(maxActivation, thisLayer[n]->getSumme_Aggregationsfunktion());
+            //Sum all connections....
+            thisLayer[n]->aggregation(prevLayer, neuronCountAt(layerNum - 1) + 1);
         }
 
         if(is_softmax) {
-            for (unsigned n = 0; n < neuronCountAt(layerNum); ++n) {
-                sumexp += std::exp(thisLayer[n]->getSumme_Aggregationsfunktion());
+            for (unsigned n = 0; n < neuronCountAt(layerNum); ++n)
+                maxActivation = std::max(maxActivation, thisLayer[n]->getSumme_Aggregationsfunktion());
+            for (unsigned n = 0; n < neuronCountAt(layerNum); ++n)
                 logSumExp += std::exp(thisLayer[n]->getSumme_Aggregationsfunktion() - maxActivation);
-            }
+            logSumExp = maxActivation + std::log(logSumExp);
         }
-        logSumExp = maxActivation + std::log(logSumExp);
 
         // Now you can use sum_of_expo for softmax operation
         for (unsigned n = 0; n < neuronCountAt(layerNum); ++n) {
-            thisLayer[n]->activation(sumexp, logSumExp); // Subtract sum_of_expo
+            thisLayer[n]->activation(logSumExp); // Subtract sum_of_expo
         }
     }
-/*    for (unsigned layerNum = 1; layerNum < layerCount() ; ++layerNum) {
-        Layer &prevLayer = m_layers[layerNum -1];
-        Layer &thisLayer = m_layers[layerNum   ];
-        double sum_of_expo = 0.0;
-        bool is_softmax = thisLayer[0]->getAktiF() == LayerType::Aktivierungsfunktion::SMAX;
-
-        for (unsigned n = 0; n < neuronCountAt(layerNum) / *- 1* / / * KEIN BIOS???!!! * /; ++n) {
-            thisLayer[n]->aggregation(prevLayer, neuronCountAt(layerNum -1) + 1 / *BIOS* /);
-            if(is_softmax)
-                sum_of_expo += std::exp( thisLayer[n]->getSumme_Aggregationsfunktion() );
-        }
-
-        if(sum_of_expo > 999999999.9)
-            sum_of_expo = 999999999.9;
-
-        for (unsigned n = 0; n < neuronCountAt(layerNum) / *- 1* / / * KEIN BIOS???!!! * /; ++n) {
-            thisLayer[n]->activation(sum_of_expo);
-        }
-    }
-*/
 }
 
 void Net::getResults(double *output) const
@@ -428,7 +419,7 @@ void Net::getResults(double *output) const
 }
 
 
-void Net::backProp(double *targetVals, const double & eta, const double & alpha, const double &range_max)
+void Net::backProp(double *targetVals, const double & eta, const double & alpha, const bool &batchLearning)
 {
     Layer & outputLayer = m_layers[ this->layerCount() - 1]; // start from behind !
     unsigned output_neuron_count_ohne_bias =  neuronCountAt( this->layerCount() - 1 ) /*MACH ICHWEG!!!!! - 1*/ ;
@@ -460,14 +451,28 @@ void Net::backProp(double *targetVals, const double & eta, const double & alpha,
     }
 
     //gewichte anpassen
-    for (unsigned long Layernum = layerCount() -1 ; Layernum > 0; --Layernum)
+    for (long Layernum = layerCount() -1 ; Layernum > 0; --Layernum)
     {
         Layer & layer = m_layers[Layernum];
         Layer & prevLayer = m_layers[Layernum -1];
 
         for (unsigned n = 0; n < neuronCountAt(Layernum) + 1; ++n)
         {
-            layer[n]->updateInputWeights(prevLayer, neuronCountAt(Layernum -1) + 1, eta, alpha, range_max);
+            layer[n]->updateInputWeights(prevLayer, neuronCountAt(Layernum -1) + 1, eta, alpha, batchLearning);
+        }
+    }
+}
+
+
+void Net::applyBatch()
+{
+    //gewichte anpassen
+    for (long Layernum = layerCount() - 1 - 1/*skip last*/ ; Layernum >= /*update also first layer*/ 0; --Layernum)
+    {
+        Layer & layer = m_layers[Layernum];
+        for (unsigned n = 0; n < neuronCountAt(Layernum) + 1; ++n)
+        {
+            layer[n]->applyBatch();
         }
     }
 }
