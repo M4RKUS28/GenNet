@@ -285,7 +285,7 @@ std::vector<LayerType> Net::getTopologyFromStr(const std::string &top)
     return retTop;
 }
 
-std::string Net::getTopologyStr()
+std::string Net::getTopologyStr() const
 {
     std::string retV;
     for (unsigned i = 0; i < getTopology().size(); ++i)
@@ -321,6 +321,27 @@ bool Net::createCopyFrom(const Net *origin)
         }
     }
     return true;
+}
+
+double Net::getDifferenceFromOtherNet(const Net *other)
+{
+    if(other->getTopologyStr() != getTopologyStr()) {
+        std::cerr << "Got net with differned top for difference!" << std::endl;
+        return -1;
+    }
+    double diff = 0.0;
+    size_t w_count = 0;
+
+    for (unsigned layerNum = 0; layerNum < topology.size(); ++layerNum) {
+        for (unsigned neuronNum = 0; neuronNum < topology.at(layerNum).neuronCount + 1 /*bias*/; ++neuronNum) {
+            for(unsigned c = 0; c < this->m_layers[layerNum][neuronNum]->getConections_count(); c++) {
+                diff += abs( (this->m_layers[layerNum][neuronNum]->m_outputWeights[c] - other->m_layers[layerNum][neuronNum]->m_outputWeights[c]));
+                w_count ++;
+            }
+        }
+    }
+
+    return diff / (double)w_count;
 }
 
 

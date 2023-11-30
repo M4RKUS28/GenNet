@@ -28,7 +28,7 @@ public:
     //topology stuff
     std::vector<LayerType> getTopology() const;
     static std::vector<LayerType> getTopologyFromStr(const std::string & top);
-    std::string getTopologyStr();
+    std::string getTopologyStr() const;
 
     //net main functions:
     //<<In
@@ -42,6 +42,10 @@ public:
 
     //make copy from other
     bool createCopyFrom(const Net *origin);
+
+    // get Difference from other net
+
+    double getDifferenceFromOtherNet(const Net * other);
 
     //get infos
     double getConWeight(const unsigned int &layer, const unsigned int &neuronFrom, const unsigned int &neuronTo) const;

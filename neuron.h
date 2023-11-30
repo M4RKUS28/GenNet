@@ -6,11 +6,35 @@
 
 #include <random>
 
-extern std::mt19937/*minstd_rand*/ generator;
-extern std::uniform_real_distribution<double> distribution;
+//extern std::mt19937/*minstd_rand*/ generator;
+//extern std::uniform_real_distribution<double> distribution;
 
-extern std::mt19937 gen;
-extern std::normal_distribution<double> randomGaussianDistribution;
+//extern std::mt19937 gen;
+//extern std::normal_distribution<double> randomGaussianDistribution;
+
+#include <cstdint>
+
+class FastRandom {
+public:
+    using result_type = std::uint64_t;
+
+    FastRandom(result_type seed = 0) : state{seed, 0} {}
+
+    result_type operator()() {
+        result_type x = state[0];
+        result_type const y = state[1];
+        state[0] = y;
+        x ^= x << 23; // a
+        state[1] = x ^ y ^ (x >> 17) ^ (y >> 26); // b, c
+        return state[1] + y;
+    }
+
+    static constexpr result_type min() { return std::numeric_limits<result_type>::min(); }
+    static constexpr result_type max() { return std::numeric_limits<result_type>::max(); }
+
+private:
+    result_type state[2];
+};
 
 
 class Neuron;

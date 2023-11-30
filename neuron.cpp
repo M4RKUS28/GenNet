@@ -25,23 +25,26 @@ Neuron::~Neuron(){
     delete m_outputWeights;
 }
 
-std::mt19937/*minstd_rand*/ generator(std::random_device{}());
+
+
+
+FastRandom/*std::mt19937*//*minstd_rand*/ generator2(std::random_device{}());
 std::uniform_real_distribution<double> distribution(-1.0, 1.0);
 
 double Neuron::randomWeight()
 {
-    return distribution(generator);
+    return distribution(generator2);
 }
 
 
-std::mt19937 gen(std::random_device{}());
+FastRandom/*std::mt19937*/ gen2(std::random_device{}());
 std::normal_distribution<double> randomGaussianDistribution(0.0, 1.0);
 
 void Neuron::mutate(const double &rate, const double &m_range)
 {
     for(unsigned i = 0; i < conections_count; i++)
-        if( std::abs(distribution(generator)) < rate) {
-            m_outputWeights[i] += randomGaussianDistribution(gen) * m_range;
+        if( std::abs(distribution(generator2)) < rate) {
+            m_outputWeights[i] += randomGaussianDistribution(gen2) * m_range;
             if(m_outputWeights[i] < -1)
                 m_outputWeights[i] = -1;
             else if(m_outputWeights[i] > 1)
