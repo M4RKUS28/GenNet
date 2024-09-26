@@ -219,14 +219,14 @@ void Neuron::updateInputWeights(Layer &prevLayer, const unsigned & prevLayerNeur
 
         // Apply gradient clipping to newDeltaWeight
 
-        double clippingMaxVal = 1.0;
-        if (newDeltaWeight > clippingMaxVal) {
-            perror("WARNING: CLIPPING TO 1");
-            newDeltaWeight = clippingMaxVal;
-        } else if (newDeltaWeight < -clippingMaxVal) {
-            newDeltaWeight = -clippingMaxVal;
-            perror("WARNING: CLIPPING TO -1");
-        }
+        // double clippingMaxVal = 1000.0;
+        // if (newDeltaWeight > clippingMaxVal) {
+        //     perror("WARNING: CLIPPING TO 1");
+        //     newDeltaWeight = clippingMaxVal;
+        // } else if (newDeltaWeight < -clippingMaxVal) {
+        //     newDeltaWeight = -clippingMaxVal;
+        //     perror("WARNING: CLIPPING TO -1");
+        // }
 
         neuron->delta_Weights[(my_Index)] = newDeltaWeight;
         if(batchLearning) {

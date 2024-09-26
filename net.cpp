@@ -226,9 +226,12 @@ std::vector<LayerType> Net::getTopologyFromStr(const std::string &top)
                         lt.aggrF = LayerType::Aggregationsfunktion::MIN;
                     else if(part_s == "AVG")
                         lt.aggrF = LayerType::Aggregationsfunktion::AVG;
-                    else if(part_s == "INPUT")
+                    else if(part_s == "INPUT") {
                         lt.aggrF = LayerType::Aggregationsfunktion::INPUT_LAYER;
-                    else {
+                        count = 3;
+
+                        break;
+                    } else {
                         std::cerr << "Invalid Aggregationsfunktion: " << part_s << std::endl;
                         break;
                     }
