@@ -2,69 +2,141 @@
 #define AGENT_H
 
 #include "net.h"
+
 #include <algorithm>
 #include <deque>
+#include <memory>
+#include <numeric>
+#include <random>
 #include <vector>
 
-typedef std::vector<double> State;
-typedef std::vector<int> Action;
+using State = std::vector<double>;
+using Action = std::vector<int>;
 
+/**
+ * @brief A single experience tuple (s, a, r, s', done) stored in replay memory.
+ */
+struct Transition {
+  State state;
+  Action action;
+  double reward = 0.0;
+  State nextState;
+  bool done = false;
+
+  Transition() = default;
+  Transition(State state, Action action, double reward, State nextState,
+             bool done)
+      : state(std::move(state)), action(std::move(action)), reward(reward),
+        nextState(std::move(nextState)), done(done) {}
+};
+
+/**
+ * @brief DQN reinforcement learning agent with experience replay and target
+ * network.
+ *
+ * Uses an epsilon-greedy policy with linear decay. The target network is
+ * periodically synced from the policy network every `targetSyncInterval`
+ * training steps for stable Q-value estimation.
+ */
 class Agent {
 public:
-  Agent(std::string netTop, double gamma = 0.9, double epsilon = 80.0,
-        unsigned batchSize = 1000, unsigned targetSyncInterval = 100);
-  Agent(Net *net, double gamma = 0.9, double epsilon = 80.0,
-        unsigned batchSize = 1000, unsigned targetSyncInterval = 100);
-  ~Agent();
-
-  struct MEM_ENTRY {
-    MEM_ENTRY() {}
-    MEM_ENTRY(State state, Action action, double reward, State nextState,
-              bool done)
-        : state(state), action(action), reward(reward), nextState(nextState),
-          done(done) {}
-
-    State state;
-    Action action;
-    double reward;
-    State nextState;
-    bool done;
-  };
-
-  void train_short_memory(const MEM_ENTRY &mem);
-  void train_long_memory();
-  void remember(const MEM_ENTRY &mem);
-
   /**
-   * @brief Computes the DQN target values for a given memory entry.
-   *
-   * Uses the target network (if available) for stable Q-value estimation.
-   * Re-runs feedForward on the original state so backProp computes
-   * correct gradients.
+   * @brief Construct agent from a topology string.
+   * @param netTop  Topology string (e.g. "4_INPUT,64_SUM_RELU,2_SUM_IDENTITY")
+   * @param gamma   Discount factor for future rewards (0..1)
+   * @param epsilon Initial epsilon for exploration (decays with n_games)
+   * @param batchSize Number of samples per long-memory training batch
+   * @param targetSyncInterval Sync target net every N training steps
+   * @param learningRate Learning rate (eta) for backpropagation
+   * @param momentum Momentum (alpha) for backpropagation
    */
-  double *targetValue(const MEM_ENTRY &mem);
+  Agent(const std::string &netTop, double gamma = 0.9, double epsilon = 80.0,
+        unsigned batchSize = 1000, unsigned targetSyncInterval = 100,
+        double learningRate = 0.01, double momentum = 0.15);
 
   /**
-   * @brief Copies weights from the policy network to the target network.
-   * Called automatically every `targetSyncInterval` training steps.
+   * @brief Construct agent from an existing network (takes ownership).
+   */
+  Agent(std::unique_ptr<Net> net, double gamma = 0.9, double epsilon = 80.0,
+        unsigned batchSize = 1000, unsigned targetSyncInterval = 100,
+        double learningRate = 0.01, double momentum = 0.15);
+
+  ~Agent() = default;
+
+  // Non-copyable, movable
+  Agent(const Agent &) = delete;
+  Agent &operator=(const Agent &) = delete;
+  Agent(Agent &&) = default;
+  Agent &operator=(Agent &&) = default;
+
+  // --- Core API ---
+
+  /**
+   * @brief Perform one step: train on transition, remember it, and if the
+   * episode is done, increment n_games and run long-memory training.
+   */
+  void addStep(const State &lastState, const State &newState,
+               const Action &action, double reward, bool done);
+
+  /**
+   * @brief Select an action using epsilon-greedy policy.
+   */
+  Action getAction(const State &state);
+
+  // --- Accessors ---
+
+  unsigned getNumGames() const { return n_games; }
+  double getEpsilon() const { return currentEpsilon(); }
+  double getRecentError() const { return net->recentAverrageError(); }
+  const Net *getNet() const { return net.get(); }
+  const Net *getTargetNet() const { return targetNet.get(); }
+
+private:
+  void trainOnTransition(const Transition &t, bool batchMode);
+  void trainShortMemory(const Transition &t);
+  void trainLongMemory();
+  void remember(const Transition &t);
+
+  /**
+   * @brief Compute target Q-values for a transition.
+   *
+   * Uses target network for next-state value estimation (Double DQN style).
+   * Re-runs feedForward on the original state afterwards so backProp
+   * computes correct gradients.
+   */
+  std::vector<double> computeTargets(const Transition &t);
+
+  /**
+   * @brief Copy weights from policy network to target network.
    */
   void syncTargetNet();
 
-public:
-  void addStep(State lastState, State newState, Action action, double reward,
-               bool done);
-  Action getAction(const State &state);
+  double currentEpsilon() const {
+    double e = epsilon - static_cast<double>(n_games);
+    return e > 0.0 ? e : 0.0;
+  }
 
-  std::deque<MEM_ENTRY> memory;
-  Net *net = nullptr;       // Policy network (owned)
-  Net *targetNet = nullptr; // Target network for stable Q-targets (owned)
-  const unsigned maxMemSize = 100000;
-  unsigned batchSize;
+  // --- Networks ---
+  std::unique_ptr<Net> net;
+  std::unique_ptr<Net> targetNet;
+
+  // --- Hyperparameters ---
   double gamma;
   double epsilon;
-  unsigned n_games = 0;              // Game counter for epsilon decay
-  unsigned targetSyncInterval = 100; // Sync target net every N training steps
-  unsigned totalTrainSteps = 0;      // Total backprop calls for sync timing
+  double learningRate;
+  double momentum;
+  unsigned batchSize;
+  unsigned targetSyncInterval;
+
+  // --- State ---
+  std::deque<Transition> memory;
+  static constexpr unsigned kMaxMemorySize = 100000;
+  unsigned n_games = 0;
+  unsigned totalTrainSteps = 0;
+  int outputSize = 0;
+
+  // --- RNG ---
+  std::mt19937 rng{std::random_device{}()};
 };
 
 #endif // AGENT_H
