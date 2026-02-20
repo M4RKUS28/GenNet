@@ -62,3 +62,5 @@ Fraktalgenerator_resource.rc
 debug/
 release/
 release*/
+build/
+*.user
