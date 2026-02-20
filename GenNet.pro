@@ -10,16 +10,16 @@ CONFIG += c++17
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
-    agent.cpp \
-    net.cpp \
-    neuron.cpp \
-    population.cpp
+    src/agent.cpp \
+    src/net.cpp \
+    src/neuron.cpp \
+    src/population.cpp
 
 HEADERS += \
-    agent.h \
-    net.h \
-    neuron.h \
-    population.h
+    src/agent.h \
+    src/net.h \
+    src/neuron.h \
+    src/population.h
 
 # Default rules for deployment.
 unix {
