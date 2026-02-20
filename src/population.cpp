@@ -118,11 +118,10 @@ void Population::evolve(const unsigned int &best, const double mutation_rate,
 
   double diff_best_and_zero[3];
   if (n_count >= 3) {
-    diff_best_and_zero[0] = nets[1]->getDifferenceFromOtherNet(nets[best]);
-    diff_best_and_zero[1] =
-        nets[n_count - 1]->getDifferenceFromOtherNet(nets[best]);
+    diff_best_and_zero[0] = nets[1]->getDifferenceFrom(nets[best]);
+    diff_best_and_zero[1] = nets[n_count - 1]->getDifferenceFrom(nets[best]);
     diff_best_and_zero[2] =
-        nets[n_count / 2 + 1]->getDifferenceFromOtherNet(nets[best]);
+        nets[n_count / 2 + 1]->getDifferenceFrom(nets[best]);
   }
 
   if (useMutThreads)
@@ -217,7 +216,7 @@ void Population::evolveWithSimulatedAnnealing(const double mutation_rate,
 
   if (last_best_mutated >= 0 && last_best_mutated < (int)n_count) {
     std::cout << " Average mutation: [best] to [mutated_best] is "
-              << nets[last_best_mutated]->getDifferenceFromOtherNet(nets[best])
+              << nets[last_best_mutated]->getDifferenceFrom(nets[best])
               << std::endl;
   }
   std::cout << " Temperature: " << this->temp

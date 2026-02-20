@@ -87,7 +87,7 @@ public:
 
   unsigned getNumGames() const { return n_games; }
   double getEpsilon() const { return currentEpsilon(); }
-  double getRecentError() const { return net->recentAverrageError(); }
+  double getRecentError() const { return net->recentAverageError(); }
   const Net *getNet() const { return net.get(); }
   const Net *getTargetNet() const { return targetNet.get(); }
 

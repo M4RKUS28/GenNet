@@ -1,149 +1,127 @@
 #include "neuron.h"
+
+#include <algorithm>
 #include <cmath>
 #include <iostream>
-#include <ostream>
 
-Neuron::Neuron(unsigned int anzahl_an_neuronen_des_naechsten_Layers,
-               unsigned int my_Index, const LayerType &layerT,
-               const double &init_range, bool enable_batch_learning)
-    : batch_learning_enabled(enable_batch_learning), layerType(layerT),
-      conections_count(anzahl_an_neuronen_des_naechsten_Layers),
-      my_Index(my_Index), m_gradient(0.0)
+// ---------------------------------------------------------------------------
+// Thread-local RNG instances (safe for multi-threaded Population mutation)
+// ---------------------------------------------------------------------------
 
-{
-  m_outputWeights = new double[anzahl_an_neuronen_des_naechsten_Layers];
-  delta_Weights = new double[anzahl_an_neuronen_des_naechsten_Layers];
-  if (batch_learning_enabled)
-    batch_weight = new double[anzahl_an_neuronen_des_naechsten_Layers];
+static thread_local FastRandom tl_uniformRng(std::random_device{}());
+static thread_local std::uniform_real_distribution<double> tl_uniformDist(-1.0,
+                                                                          1.0);
+static thread_local FastRandom tl_gaussianRng(std::random_device{}());
+static thread_local std::normal_distribution<double> tl_gaussianDist(0.0, 1.0);
 
-  for (unsigned c = 0; c < anzahl_an_neuronen_des_naechsten_Layers; ++c) {
-    m_outputWeights[c] = randomWeight() * init_range;
-    delta_Weights[c] = 0.0;
-    if (batch_learning_enabled)
-      batch_weight[c] = 0.0;
+// ---------------------------------------------------------------------------
+// Neuron construction / destruction
+// ---------------------------------------------------------------------------
+
+Neuron::Neuron(unsigned nextLayerSize, unsigned myIndex,
+               const LayerType &layerT, double initRange,
+               bool enableBatchLearning)
+    : weights(std::make_unique<double[]>(nextLayerSize)),
+      deltaWeights(std::make_unique<double[]>(nextLayerSize)),
+      batchWeights(enableBatchLearning
+                       ? std::make_unique<double[]>(nextLayerSize)
+                       : nullptr),
+      layerType(layerT), connectionCount(nextLayerSize), myIndex(myIndex),
+      batchLearningEnabled(enableBatchLearning) {
+  for (unsigned c = 0; c < nextLayerSize; ++c) {
+    weights[c] = randomWeight() * initRange;
+    deltaWeights[c] = 0.0;
+    if (batchWeights)
+      batchWeights[c] = 0.0;
   }
 }
 
-Neuron::~Neuron() { delete m_outputWeights; }
+Neuron::~Neuron() = default;
 
-FastRandom /*std::mt19937*/ /*minstd_rand*/ generator2(std::random_device{}());
-std::uniform_real_distribution<double> distribution(-1.0, 1.0);
+// ---------------------------------------------------------------------------
+// Random weight generation
+// ---------------------------------------------------------------------------
 
-double Neuron::randomWeight() { return distribution(generator2); }
+double Neuron::randomWeight() { return tl_uniformDist(tl_uniformRng); }
 
-FastRandom /*std::mt19937*/ gen2(std::random_device{}());
-std::normal_distribution<double> randomGaussianDistribution(0.0, 1.0);
+// ---------------------------------------------------------------------------
+// Mutation (genetic algorithms)
+// ---------------------------------------------------------------------------
 
-void Neuron::mutate(const double &rate, const double &m_range) {
-  for (unsigned i = 0; i < conections_count; i++)
-    if (std::abs(distribution(generator2)) < rate) {
-      m_outputWeights[i] += randomGaussianDistribution(gen2) * m_range;
-      if (m_outputWeights[i] < -1)
-        m_outputWeights[i] = -1;
-      else if (m_outputWeights[i] > 1)
-        m_outputWeights[i] = 1;
+void Neuron::mutate(double rate, double range) {
+  for (unsigned i = 0; i < connectionCount; i++) {
+    if (std::abs(tl_uniformDist(tl_uniformRng)) < rate) {
+      weights[i] += tl_gaussianDist(tl_gaussianRng) * range;
+      weights[i] = std::clamp(weights[i], -1.0, 1.0);
     }
+  }
 }
 
-void Neuron::activation(const double &logsumexp) {
-  m_outputVal =
-      activationFunction(this->result_Aggregationsfunktion, logsumexp);
-}
+// ---------------------------------------------------------------------------
+// Forward pass: aggregation + activation
+// ---------------------------------------------------------------------------
 
-void Neuron::aggregation(const Layer &prevLayer,
-                         const unsigned int &neuron_count) {
-  this->result_Aggregationsfunktion = 0.0;
+void Neuron::aggregation(const Layer &prevLayer, unsigned neuronCount) {
+  aggregationResult = 0.0;
 
-  switch (this->getAggrF()) {
-  case LayerType::Aggregationsfunktion::SUM:
-    for (unsigned n = 0; n < neuron_count; ++n)
-      this->result_Aggregationsfunktion +=
-          prevLayer[n]->getOutputVal() *
-          prevLayer[n]->m_outputWeights[my_Index];
+  switch (getAggregation()) {
+  case LayerType::SUM:
+    for (unsigned n = 0; n < neuronCount; ++n)
+      aggregationResult +=
+          prevLayer[n]->getOutputVal() * prevLayer[n]->getWeight(myIndex);
     break;
-  case LayerType::Aggregationsfunktion::AVG:
-    for (unsigned n = 0; n < neuron_count; ++n)
-      this->result_Aggregationsfunktion +=
-          prevLayer[n]->getOutputVal() *
-          prevLayer[n]->m_outputWeights[my_Index];
-    this->result_Aggregationsfunktion /= (double)neuron_count;
+
+  case LayerType::AVG:
+    for (unsigned n = 0; n < neuronCount; ++n)
+      aggregationResult +=
+          prevLayer[n]->getOutputVal() * prevLayer[n]->getWeight(myIndex);
+    aggregationResult /= static_cast<double>(neuronCount);
     break;
-  case LayerType::Aggregationsfunktion::MAX:
-    for (unsigned n = 0; n < neuron_count; ++n)
-      this->result_Aggregationsfunktion =
-          std::max(this->result_Aggregationsfunktion,
-                   prevLayer[n]->getOutputVal() *
-                       prevLayer[n]->m_outputWeights[my_Index]);
+
+  case LayerType::MAX:
+    aggregationResult = -std::numeric_limits<double>::infinity();
+    for (unsigned n = 0; n < neuronCount; ++n)
+      aggregationResult =
+          std::max(aggregationResult, prevLayer[n]->getOutputVal() *
+                                          prevLayer[n]->getWeight(myIndex));
     break;
-  case LayerType::Aggregationsfunktion::MIN:
-    for (unsigned n = 0; n < neuron_count; ++n)
-      this->result_Aggregationsfunktion =
-          std::min(this->result_Aggregationsfunktion,
-                   prevLayer[n]->getOutputVal() *
-                       prevLayer[n]->m_outputWeights[my_Index]);
+
+  case LayerType::MIN:
+    aggregationResult = std::numeric_limits<double>::infinity();
+    for (unsigned n = 0; n < neuronCount; ++n)
+      aggregationResult =
+          std::min(aggregationResult, prevLayer[n]->getOutputVal() *
+                                          prevLayer[n]->getWeight(myIndex));
     break;
-  case LayerType::Aggregationsfunktion::INPUT_LAYER:
+
+  case LayerType::INPUT_LAYER:
     break;
   }
 }
-LayerType::Aktivierungsfunktion Neuron::getAktiF() const {
-  return layerType.aktiF;
+
+void Neuron::activation(double logsumexp) {
+  m_outputVal = activationFunction(aggregationResult, logsumexp);
 }
 
-LayerType::Aggregationsfunktion Neuron::getAggrF() const {
-  return layerType.aggrF;
-}
+// ---------------------------------------------------------------------------
+// Activation functions
+// ---------------------------------------------------------------------------
 
-double Neuron::getOutputVal() const { return m_outputVal; }
-
-void Neuron::setOutputVal(const double &newOutputVal) {
-  m_outputVal = newOutputVal;
-}
-
-unsigned int Neuron::getConections_count() const { return conections_count; }
-
-double Neuron::getSumme_Aggregationsfunktion() const {
-  return result_Aggregationsfunktion;
-}
-#include "math.h"
-double Neuron::activationFunction(const double &x, const double &logsumexp) {
-  // if(((x < 0.03 && exp_sum < 0.03) && this->getAktiF() == 2) || x < 0.003 )
-  //     std::cout << "x: " << x << " exp_sum: " << exp_sum << " neuron: " <<
-  //     this->my_Index << " " << this->getAktiF() << std::endl;
-
-  switch (this->getAktiF()) {
-  case LayerType::Aktivierungsfunktion::TANH:
+double Neuron::activationFunction(double x, double logsumexp) {
+  switch (getActivation()) {
+  case LayerType::TANH:
     return std::tanh(x);
-  case LayerType::Aktivierungsfunktion::RELU:
+  case LayerType::RELU:
     return std::max(0.0, x);
-  case LayerType::Aktivierungsfunktion::SMAX:
-    this->logsumexp = logsumexp;
+  case LayerType::SMAX:
+    m_logsumexp = logsumexp;
     return softmax(x);
-    /* The second case, −S(zi)×S(zj)−S(zi​)×S(zj​), is relevant in a
-     * specific scenario where you're interested in how the output of one neuron
-     * (neuron ii) affects the input of a different neuron (neuron jj). This
-     * scenario arises in more advanced architectures like recurrent neural
-     * networks (RNNs) or in cases where there are connections between neurons
-     * that are not in adjacent layers. Here's a practical example: Consider a
-     * recurrent neural network (RNN) with connections that loop back on
-     * themselves. In this case, the output of a neuron at time step tt (let's
-     * say neuron ii at time tt) can affect the input of the same neuron at the
-     * next time step t+1t+1 (input zjzj​ of neuron ii at time t+1t+1).In this
-     * scenario, if you're interested in computing the derivative of the output
-     * of neuron ii at time tt with respect to the input of neuron ii at time
-     * t+1t+1 (i.e., S(zi)∂zj∂zj​S(zi​)​), you would use the second
-     * case:
-     * S(zi)∂zj=−S(zi)×S(zj)∂zj​S(zi​)​=−S(zi​)×S(zj​) This situation
-     * is specific to certain types of architectures, particularly those with
-     * recurrent connections or non-standard connectivity patterns. In most
-     * standard feedforward neural networks, you'll primarily use the first case
-     * (S(zi)×(1−S(zi))S(zi​)×(1−S(zi​))) during backpropagation.*/
-  case LayerType::Aktivierungsfunktion::NONE:
+  case LayerType::NONE:
     return x;
   case LayerType::IDENTITY:
     return x;
   case LayerType::SOFTPLUS:
-    return log(1.0 + exp(x));
+    return std::log(1.0 + std::exp(x));
   case LayerType::LEAKYRELU:
     return std::max(x, 0.1 * x);
   case LayerType::SIGMOID:
@@ -152,149 +130,144 @@ double Neuron::activationFunction(const double &x, const double &logsumexp) {
   return -1.0;
 }
 
-double Neuron::softmax(const double &x) const {
-  double val = std::exp(x - logsumexp);
-  if (val == std::numeric_limits<double>::infinity() ||
-      val == std::numeric_limits<double>::signaling_NaN()) {
-    perror("INVALID X VAL!");
-    exit(12);
-  }
-  return val;
-}
-
-double Neuron::sigmoid(const double &x) { return 1.0 / (1.0 + exp(-x)); }
-
-double Neuron::activationFunctionDerative(const double &x) const {
-  switch (this->getAktiF()) {
-  case LayerType::Aktivierungsfunktion::TANH:
+double Neuron::activationFunctionDerivative(double x) const {
+  switch (getActivation()) {
+  case LayerType::TANH:
     return 1.0 - x * x;
-  case LayerType::Aktivierungsfunktion::RELU:
+  case LayerType::RELU:
     return (x > 0) ? 1.0 : 0.0;
-  case LayerType::Aktivierungsfunktion::SMAX: {
-    double sigma_i = softmax(x); // /*softmax*/(std::exp(x) / denominator);
-    return sigma_i * (1.0 - sigma_i) /** !ERRROR!   * denominator*/;
+  case LayerType::SMAX: {
+    double s = softmax(x);
+    return s * (1.0 - s);
   }
   case LayerType::NONE:
-    return 0.0;
+    return 1.0; // d/dx(x) = 1  (was incorrectly 0.0)
   case LayerType::IDENTITY:
-    return x;
+    return 1.0; // d/dx(x) = 1  (was incorrectly x)
   case LayerType::SOFTPLUS:
     return sigmoid(x);
   case LayerType::LEAKYRELU:
     return (x > 0) ? 1.0 : 0.1;
-    break;
   case LayerType::SIGMOID: {
-    double sig = sigmoid(x);
-    return sig * (1 - sig);
+    double s = sigmoid(x);
+    return s * (1.0 - s);
   }
   }
-  return x;
+  return 1.0;
 }
 
-void Neuron::calcHiddenGradients(const Layer &nextLayer,
-                                 unsigned int neuroncount_with_bias) {
-  double dow = sumDW(nextLayer, neuroncount_with_bias);
-  m_gradient = dow * activationFunctionDerative(m_outputVal);
+double Neuron::softmax(double x) const {
+  double val = std::exp(x - m_logsumexp);
+  if (std::isinf(val) || std::isnan(val)) {
+    std::cerr << "Softmax: invalid value (inf/nan) for x=" << x
+              << " logsumexp=" << m_logsumexp << std::endl;
+    return 0.0;
+  }
+  return val;
 }
+
+double Neuron::sigmoid(double x) { return 1.0 / (1.0 + std::exp(-x)); }
+
+// ---------------------------------------------------------------------------
+// Backpropagation
+// ---------------------------------------------------------------------------
 
 void Neuron::calcOutputGradients(double targetVal) {
   double delta = targetVal - m_outputVal;
-  m_gradient = delta * activationFunctionDerative(m_outputVal);
+  m_gradient = delta * activationFunctionDerivative(m_outputVal);
 }
 
-void Neuron::updateInputWeights(Layer &prevLayer,
-                                const unsigned &prevLayerNeuronCount,
-                                const double &eta, const double &alpha,
-                                const bool batchLearning) {
+void Neuron::calcHiddenGradients(const Layer &nextLayer,
+                                 unsigned neuronCountWithBias) {
+  double dow = sumDW(nextLayer, neuronCountWithBias);
+  m_gradient = dow * activationFunctionDerivative(m_outputVal);
+}
 
+void Neuron::updateInputWeights(Layer &prevLayer, unsigned prevLayerNeuronCount,
+                                double eta, double alpha, bool batchLearning) {
   for (unsigned n = 0; n < prevLayerNeuronCount; ++n) {
     Neuron *neuron = prevLayer[n];
 
-    double oldDeltaWeight = neuron->delta_Weights[my_Index];
-    double newDeltaWeight =
-        eta * neuron->getOutputVal() * m_gradient +
-        alpha * oldDeltaWeight; //<== HIER mit TZeit : 56:00 mint und
-                                //https://www.youtube.com/watch?v=KkwX7FkLfug
+    double oldDelta = neuron->getDeltaWeight(myIndex);
+    double newDelta =
+        eta * neuron->getOutputVal() * m_gradient + alpha * oldDelta;
 
-    // Apply gradient clipping to newDeltaWeight
-
-    // double clippingMaxVal = 1000.0;
-    // if (newDeltaWeight > clippingMaxVal) {
-    //     perror("WARNING: CLIPPING TO 1");
-    //     newDeltaWeight = clippingMaxVal;
-    // } else if (newDeltaWeight < -clippingMaxVal) {
-    //     newDeltaWeight = -clippingMaxVal;
-    //     perror("WARNING: CLIPPING TO -1");
-    // }
-
-    neuron->delta_Weights[(my_Index)] = newDeltaWeight;
+    neuron->setDeltaWeight(myIndex, newDelta);
     if (batchLearning) {
-      if (!batch_learning_enabled) {
-        perror("Batch learning not enabled!");
+      if (!batchLearningEnabled) {
+        std::cerr << "Error: batch learning not enabled!" << std::endl;
         return;
-      } else {
-        neuron->batch_weight[(my_Index)] += newDeltaWeight;
       }
+      neuron->addToBatchWeight(myIndex, newDelta);
     } else {
-      neuron->m_outputWeights[(my_Index)] += newDeltaWeight;
+      neuron->setWeight(myIndex, neuron->getWeight(myIndex) + newDelta);
     }
   }
 }
 
 double Neuron::sumDW(const Layer &nextLayer,
-                     unsigned neuroncount_with_bias) const {
+                     unsigned neuronCountWithBias) const {
   double sum = 0.0;
-  for (unsigned n = 0; n < neuroncount_with_bias; ++n) {
-    sum += m_outputWeights[n] * nextLayer[n]->m_gradient;
+  for (unsigned n = 0; n < neuronCountWithBias; ++n) {
+    sum += weights[n] * nextLayer[n]->m_gradient;
   }
   return sum;
 }
 
 void Neuron::applyBatch() {
-  if (!batch_learning_enabled) {
-    perror("Batch learning not enabled!");
+  if (!batchLearningEnabled || !batchWeights) {
+    std::cerr << "Error: batch learning not enabled!" << std::endl;
     return;
   }
-  for (unsigned i = 0; i < this->getConections_count(); ++i) {
-    this->m_outputWeights[i] += this->batch_weight[(i)];
-    this->batch_weight[i] = 0.0;
+  for (unsigned i = 0; i < connectionCount; ++i) {
+    weights[i] += batchWeights[i];
+    batchWeights[i] = 0.0;
   }
 }
 
-std::string LayerType::aggregationsfunktionToString() {
-  if (aggrF == SUM)
-    return "SUM";
-  else if (aggrF == AVG)
-    return "AVG";
-  else if (aggrF == MAX)
-    return "MAX";
-  else if (aggrF == MIN)
-    return "MIN";
-  else if (aggrF == INPUT_LAYER)
-    return "INPUT_LAYER";
-  else
-    return "Unknown";
+char Neuron::getType() const {
+  // Placeholder — return 'N' for normal neuron
+  return 'N';
 }
 
-std::string LayerType::aktivierungsfunktionToString() {
-  if (aktiF == TANH)
+// ---------------------------------------------------------------------------
+// LayerType string conversion
+// ---------------------------------------------------------------------------
+
+std::string LayerType::aggregationToString() const {
+  switch (aggregation) {
+  case SUM:
+    return "SUM";
+  case AVG:
+    return "AVG";
+  case MAX:
+    return "MAX";
+  case MIN:
+    return "MIN";
+  case INPUT_LAYER:
+    return "INPUT_LAYER";
+  }
+  return "Unknown";
+}
+
+std::string LayerType::activationToString() const {
+  switch (activation) {
+  case TANH:
     return "TANH";
-  else if (aktiF == RELU)
+  case RELU:
     return "RELU";
-  else if (aktiF == SMAX)
+  case SMAX:
     return "SMAX";
-  else if (aktiF == NONE)
+  case NONE:
     return "NONE";
-
-  else if (aktiF == IDENTITY)
+  case IDENTITY:
     return "IDENTITY";
-  else if (aktiF == SOFTPLUS)
+  case SOFTPLUS:
     return "SOFTPLUS";
-  else if (aktiF == LEAKYRELU)
+  case LEAKYRELU:
     return "LEAKYRELU";
-  else if (aktiF == SIGMOID)
+  case SIGMOID:
     return "SIGMOID";
-
-  else
-    return "Unknown";
+  }
+  return "Unknown";
 }

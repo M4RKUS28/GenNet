@@ -1,54 +1,21 @@
 #ifndef NEURON_H
 #define NEURON_H
 
+#include "fastrandom.h"
+
+#include <memory>
 #include <random>
+#include <string>
 #include <vector>
 
-
-#include <random>
-
-// extern std::mt19937/*minstd_rand*/ generator;
-// extern std::uniform_real_distribution<double> distribution;
-
-// extern std::mt19937 gen;
-// extern std::normal_distribution<double> randomGaussianDistribution;
-
-#include <cstdint>
-
-class FastRandom {
-public:
-  using result_type = std::uint64_t;
-
-  FastRandom(result_type seed = 0) : state{seed, 0} {}
-
-  result_type operator()() {
-    result_type x = state[0];
-    result_type const y = state[1];
-    state[0] = y;
-    x ^= x << 23;                             // a
-    state[1] = x ^ y ^ (x >> 17) ^ (y >> 26); // b, c
-    return state[1] + y;
-  }
-
-  static constexpr result_type min() {
-    return std::numeric_limits<result_type>::min();
-  }
-  static constexpr result_type max() {
-    return std::numeric_limits<result_type>::max();
-  }
-
-private:
-  result_type state[2];
-};
-
-class Neuron;
-typedef Neuron **Layer;
+// ---------------------------------------------------------------------------
+// LayerType — describes the configuration for one network layer
+// ---------------------------------------------------------------------------
 
 struct LayerType {
+  enum AggregationFunction { SUM = 0, AVG, MAX, MIN, INPUT_LAYER } aggregation;
 
-  enum Aggregationsfunktion { SUM = 0, AVG, MAX, MIN, INPUT_LAYER } aggrF;
-
-  enum Aktivierungsfunktion {
+  enum ActivationFunction {
     TANH = 0,
     RELU,
     SMAX,
@@ -57,82 +24,102 @@ struct LayerType {
     SOFTPLUS,
     LEAKYRELU,
     SIGMOID
-  } aktiF;
+  } activation;
 
-  unsigned neuronCount;
+  unsigned neuronCount = 0;
 
-  LayerType() {}
-  LayerType(unsigned neuronCount, Aggregationsfunktion aggrF,
-            Aktivierungsfunktion aktiF)
-      : aggrF(aggrF), aktiF(aktiF), neuronCount(neuronCount) {}
+  LayerType() : aggregation(INPUT_LAYER), activation(NONE), neuronCount(0) {}
+  LayerType(unsigned neuronCount, AggregationFunction aggr,
+            ActivationFunction acti)
+      : aggregation(aggr), activation(acti), neuronCount(neuronCount) {}
 
-  std::string aggregationsfunktionToString();
-
-  std::string aktivierungsfunktionToString();
+  std::string aggregationToString() const;
+  std::string activationToString() const;
 };
+
+// ---------------------------------------------------------------------------
+// Neuron
+// ---------------------------------------------------------------------------
+
+class Neuron;
+typedef Neuron **Layer;
 
 class Neuron {
 public:
-  Neuron(unsigned anzahl_an_neuronen_des_naechsten_Layers, unsigned my_Index,
-         const LayerType &layerT, const double &init_range = 1.0,
-         bool enable_batch_learning = true);
+  Neuron(unsigned nextLayerSize, unsigned myIndex, const LayerType &layerT,
+         double initRange = 1.0, bool enableBatchLearning = true);
   ~Neuron();
 
-  // feed forward
-  void aggregation(const Layer &prevLayer, const unsigned &neuron_count);
+  // Non-copyable, non-movable (owned by Net via raw arrays)
+  Neuron(const Neuron &) = delete;
+  Neuron &operator=(const Neuron &) = delete;
+  Neuron(Neuron &&) = delete;
+  Neuron &operator=(Neuron &&) = delete;
 
-  void activation(const double &logsumexp = 0.0);
-  // change weigts for genetic algorithm
-  void mutate(const double &rate, const double &m_range);
-  // get output
+  // --- Forward pass ---
+  void aggregation(const Layer &prevLayer, unsigned neuronCount);
+  void activation(double logsumexp = 0.0);
 
-  double getOutputVal() const;
+  // --- Mutation (genetic algorithms) ---
+  void mutate(double rate, double range);
 
-  // gradien calculation for feed forward back probagation
+  // --- Backpropagation ---
   void calcOutputGradients(double targetVal);
   void calcHiddenGradients(const Layer &nextLayer,
-                           unsigned neuroncount_with_bias);
-  void updateInputWeights(Layer &prevLayer,
-                          const unsigned int &prevLayerNeuronCount,
-                          const double &eta, const double &alpha,
-                          const bool batchLearning);
-  double sumDW(const Layer &nextLayer, unsigned neuroncount_with_bias) const;
+                           unsigned neuronCountWithBias);
+  void updateInputWeights(Layer &prevLayer, unsigned prevLayerNeuronCount,
+                          double eta, double alpha, bool batchLearning);
+  double sumDW(const Layer &nextLayer, unsigned neuronCountWithBias) const;
 
-  void calcBatchWeights(Layer &prevLayer,
-                        const unsigned int &prevLayerNeuronCount,
-                        const double &eta, const double &alpha);
+  void calcBatchWeights(Layer &prevLayer, unsigned prevLayerNeuronCount,
+                        double eta, double alpha);
   void applyBatch();
 
-  // intern
-  unsigned int getConections_count() const;
-  double getSumme_Aggregationsfunktion() const;
+  // --- Accessors ---
+  double getOutputVal() const { return m_outputVal; }
+  void setOutputVal(double val) { m_outputVal = val; }
+  unsigned getConnectionCount() const { return connectionCount; }
+  double getAggregationResult() const { return aggregationResult; }
   char getType() const;
 
-  void setOutputVal(const double &newOutputVal);
-  double *m_outputWeights;
-  double *delta_Weights;
-  double *batch_weight;
-  bool batch_learning_enabled;
+  LayerType::AggregationFunction getAggregation() const {
+    return layerType.aggregation;
+  }
+  LayerType::ActivationFunction getActivation() const {
+    return layerType.activation;
+  }
 
-  LayerType::Aggregationsfunktion getAggrF() const;
-  LayerType::Aktivierungsfunktion getAktiF() const;
+  // Weight access — needed by Net for save/load/copy
+  double getWeight(unsigned idx) const { return weights[idx]; }
+  void setWeight(unsigned idx, double val) { weights[idx] = val; }
+  double getDeltaWeight(unsigned idx) const { return deltaWeights[idx]; }
+  void setDeltaWeight(unsigned idx, double val) { deltaWeights[idx] = val; }
+  void addToBatchWeight(unsigned idx, double val) { batchWeights[idx] += val; }
 
 private:
-  double activationFunction(const double &x, const double &logsumexp = 0.0);
-  double activationFunctionDerative(const double &x) const;
-
+  double activationFunction(double x, double logsumexp = 0.0);
+  double activationFunctionDerivative(double x) const;
+  double softmax(double x) const;
+  static double sigmoid(double x);
   double randomWeight();
+
+  // --- Weights (owned arrays) ---
+  std::unique_ptr<double[]> weights;
+  std::unique_ptr<double[]> deltaWeights;
+  std::unique_ptr<double[]> batchWeights; // nullptr if batch learning disabled
+
+  // --- State ---
   LayerType layerType;
-
-  unsigned conections_count;
-  double result_Aggregationsfunktion = 0;
+  unsigned connectionCount;
+  double aggregationResult = 0.0;
   double m_outputVal = 0.0;
-  unsigned my_Index;
-  double m_gradient;
-  double logsumexp;
+  unsigned myIndex;
+  double m_gradient = 0.0;
+  double m_logsumexp = 0.0;
+  bool batchLearningEnabled;
 
-  double softmax(const double &x) const;
-  static double sigmoid(const double &x);
+  // --- RNG (thread-local, defined in .cpp) ---
+  // Uses global thread_local FastRandom + distributions
 };
 
 #endif // NEURON_H

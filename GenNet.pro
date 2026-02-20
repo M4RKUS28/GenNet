@@ -17,6 +17,7 @@ SOURCES += \
 
 HEADERS += \
     src/agent.h \
+    src/fastrandom.h \
     src/net.h \
     src/neuron.h \
     src/population.h

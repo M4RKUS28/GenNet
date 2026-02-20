@@ -3,7 +3,7 @@
 
 #include "neuron.h"
 
-#include <assert.h>
+#include <cassert>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -13,66 +13,58 @@ typedef Neuron **Layer;
 
 class Net {
 public:
-  Net(const std::string &topology, const double &init_range = 0.01,
-      const bool &enable_batch_learning = true);
-  Net(const std::vector<LayerType> &topology, const double &init_range = 0.01,
-      const bool &enable_batch_learning = true);
-  Net(const Net *other, const double &init_range = 0.01,
-      const bool &enable_batch_learning = true);
-  Net(const std::string filename, bool &ok,
-      const bool &enable_batch_learning = true);
+  Net(const std::string &topology, double initRange = 0.01,
+      bool enableBatchLearning = true);
+  Net(const std::vector<LayerType> &topology, double initRange = 0.01,
+      bool enableBatchLearning = true);
+  Net(const Net *other, double initRange = 0.01,
+      bool enableBatchLearning = true);
+  Net(const std::string filename, bool &ok, bool enableBatchLearning = true);
   ~Net();
 
-  // load store net -> iofstreams
-  bool save_to(const std::string &path);
-  bool load_from(const std::string &path,
-                 const bool &enable_batch_learning = true);
+  // Non-copyable (use createCopyFrom for weight copying)
+  Net(const Net &) = delete;
+  Net &operator=(const Net &) = delete;
 
-  // topology stuff
-  std::vector<LayerType> getTopology() const;
+  // --- Serialization ---
+  bool saveTo(const std::string &path);
+  bool loadFrom(const std::string &path, bool enableBatchLearning = true);
+
+  // --- Topology ---
+  const std::vector<LayerType> &getTopology() const;
   static std::vector<LayerType> getTopologyFromStr(const std::string &top);
   std::string getTopologyStr() const;
 
-  // net main functions:
-  //<<In
+  // --- Forward / Backward pass ---
   void feedForward(const double *input);
-  //>>out
   void getResults(double *output) const;
-  //~optimizer
-  void backProp(double *targetVals, const double &eta, const double &alpha,
-                const bool &batchLearning = false);
+  void backProp(double *targetVals, double eta, double alpha,
+                bool batchLearning = false);
   void applyBatch();
-  void mutate(const double &mutation_rate, const double &mutation_range = 1.0);
 
-  // make copy from other
+  // --- Genetic algorithms ---
+  void mutate(double mutationRate, double mutationRange = 1.0);
   bool createCopyFrom(const Net *origin);
+  double getDifferenceFrom(const Net *other);
 
-  // get Difference from other net
-
-  double getDifferenceFromOtherNet(const Net *other);
-
-  // get infos
-  double getConWeight(const unsigned int &layer, const unsigned int &neuronFrom,
-                      const unsigned int &neuronTo) const;
-  double getNeuronValue(const unsigned int &layer,
-                        const unsigned int &neuron) const;
-
-  double recentAverrageError() const;
+  // --- Accessors ---
+  double getConnectionWeight(unsigned layer, unsigned neuronFrom,
+                             unsigned neuronTo) const;
+  double getNeuronValue(unsigned layer, unsigned neuron) const;
+  double recentAverageError() const;
 
 private:
   unsigned layerCount() const;
-  unsigned neuronCountAt(const unsigned &layer) const;
+  unsigned neuronCountAt(unsigned layer) const;
+  void init(double initRange = 1.0, bool enableBatchLearning = true);
+  void cleanup();
 
-  Layer *m_layers;
+  Layer *m_layers = nullptr;
   std::vector<LayerType> topology;
 
-  double m_error;
-  double m_recentAverangeSmoothingFactor;
-  double m_recentAverrageError;
-
-protected:
-  void init(const double &init_range = 1.0,
-            const bool &enable_batch_learning = true);
+  double m_error = 0.0;
+  double m_recentAverageSmoothingFactor = 0.0009;
+  double m_recentAverageError = 0.0;
 };
 
 #endif // NET_H
