@@ -1,301 +1,303 @@
 #include "population.h"
-#include <cstring>
 
-Population::Population(const std::string &topology, const unsigned int &n_count,
-                       const double &init_range, const double init_t,
-                       const bool &useMutationThreads)
-    : n_count(n_count), evolution(0), temp(init_t),
-      useMutThreads(useMutationThreads) {
-  if (n_count <= 0) {
-    perror("n_count < 0");
-    exit(-5);
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <random>
+
+#ifdef _WIN32
+#include <windows.h>
+static void sleepMs(unsigned ms) { Sleep(ms); }
+#else
+#include <unistd.h>
+static void sleepMs(unsigned ms) { usleep(ms * 1000); }
+#endif
+
+// ---------------------------------------------------------------------------
+// Construction / Destruction
+// ---------------------------------------------------------------------------
+
+Population::Population(const std::string &topology, unsigned size,
+                       double initRange, double initTemperature,
+                       bool useMutationThreads)
+    : nets(std::make_unique<Net *[]>(size)),
+      scores(std::make_unique<int[]>(size)), populationSize(size),
+      temperature(initTemperature), useThreads(useMutationThreads) {
+  if (size == 0) {
+    std::cerr << "Population size must be > 0" << std::endl;
+    return;
   }
-  nets = new Net *[n_count];
-  scores = new int[n_count];
+
   std::vector<LayerType> top = Net::getTopologyFromStr(topology);
-
-  for (unsigned i = 0; i < n_count; i++) {
-    nets[i] = new Net(top, init_range);
+  for (unsigned i = 0; i < populationSize; i++) {
+    nets[i] = new Net(top, initRange);
+    scores[i] = 0;
   }
-}
-
-int Population::indexOfBest() {
-  int maxElement = scores[0];
-  int index = 0;
-  for (size_t i = 1; i < n_count; ++i) {
-    if (scores[i] > maxElement) {
-      maxElement = scores[i];
-      index = i;
-    }
-  }
-  return index;
 }
 
 Population::~Population() {
-
-  for (unsigned i = 0; i < n_count; i++) {
+  for (unsigned i = 0; i < populationSize; i++) {
     delete nets[i];
   }
-  delete[] nets;
-  delete scores;
+  // unique_ptr<Net*[]> and unique_ptr<int[]> handle array deallocation
 }
 
-#include <atomic>
-#include <list>
-#include <unistd.h>
+// ---------------------------------------------------------------------------
+// Accessors
+// ---------------------------------------------------------------------------
 
-int Population::optimalThreadCount() {
-  return std::thread::hardware_concurrency() -
-         ((std::thread::hardware_concurrency() > 1) ? 1 : 0);
+Net *Population::netAt(unsigned index) { return nets[index]; }
+const Net *Population::netAt(unsigned index) const { return nets[index]; }
+
+unsigned Population::indexOfBest() const {
+  int maxScore = scores[0];
+  unsigned bestIdx = 0;
+  for (unsigned i = 1; i < populationSize; ++i) {
+    if (scores[i] > maxScore) {
+      maxScore = scores[i];
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
 }
 
-void Population::evolve(const unsigned int &best, const double mutation_rate,
-                        const double mutation_range) {
-  if (best >= n_count || n_count <= 0) {
-    perror("invalid input!");
+unsigned Population::optimalThreadCount() {
+  unsigned hw = std::thread::hardware_concurrency();
+  return (hw > 1) ? hw - 1 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Evolution (copy best + mutate)
+// ---------------------------------------------------------------------------
+
+void Population::evolve(unsigned bestIdx, double mutationRate,
+                        double mutationRange) {
+  if (bestIdx >= populationSize || populationSize == 0) {
+    std::cerr << "evolve(): invalid bestIdx or population size" << std::endl;
     return;
   }
 
   std::vector<std::pair<std::thread, std::atomic<bool> *>> mutThreads;
-  std::list<std::pair<int, int>> copyfrom_copyTo;
-  unsigned processor_count = optimalThreadCount();
+  std::vector<MutationTask> tasks;
+  unsigned threadCount = optimalThreadCount();
 
-  /*FastRandom*/ std::mt19937 igenerator(std::random_device{}());
-  std::uniform_int_distribution<int> idistribution(0, n_count - 1);
+  std::mt19937 rng(std::random_device{}());
+  std::uniform_int_distribution<unsigned> indexDist(0, populationSize - 1);
 
-  this->evolution++;
+  evolutionCount++;
 
-  double part = (double)n_count / 4.0;
-  int optimum_task_split = n_count / (processor_count);
-  if (optimum_task_split <= 0)
-    optimum_task_split = 1;
+  double quarter = static_cast<double>(populationSize) / 4.0;
+  unsigned taskSplitSize = std::max(1u, populationSize / threadCount);
 
-  std::cout << "[0] --> < [" << (unsigned)(3.0 * part) << "]; ["
-            << (unsigned)(part * 3.0) << "] --> < [ "
-            << (unsigned)(part * 3.0 + part / 2.0) << "]; [*] --> < ["
-            << n_count << "]" << std::endl;
+  std::cout << "[0] --> < [" << static_cast<unsigned>(3.0 * quarter) << "]; ["
+            << static_cast<unsigned>(3.0 * quarter) << "] --> < ["
+            << static_cast<unsigned>(3.0 * quarter + quarter / 2.0)
+            << "]; [*] --> < [" << populationSize << "]" << std::endl;
 
-  for (unsigned i = 0; i < (unsigned)(3.0 * part); i++) {
-    if (i == best)
+  // Group 1: 75% of population — copy from best, standard mutation
+  for (unsigned i = 0; i < static_cast<unsigned>(3.0 * quarter); i++) {
+    if (i == bestIdx)
       continue;
-    else if (i % optimum_task_split == 0) {
-      do_create_new(&mutThreads, copyfrom_copyTo, processor_count, nets,
-                    mutation_rate, mutation_range);
-      copyfrom_copyTo.clear();
-    } else
-      copyfrom_copyTo.push_back(std::pair<int, int>(best, i));
-  }
-
-  // Hier aufteilen, einen Teil mut range und rate #ändern, einen teil mit
-  // zufälligen anderen muatationen evolven startzufall weiter mutieren
-  for (unsigned i = part * 3.0; i < (unsigned)(part * 3.0 + part / 2.0); i++) {
-    int num = idistribution(igenerator);
-    if (i == best || (unsigned)num == i)
-      continue;
-    else if (i % optimum_task_split == 0) {
-      do_create_new(&mutThreads, copyfrom_copyTo, processor_count, nets, 0.01,
-                    0.2);
-      copyfrom_copyTo.clear();
-    } else
-      copyfrom_copyTo.push_back(std::pair<int, int>(best, i));
-  }
-
-  // Hohe Mutation
-  for (unsigned i = (unsigned)(part * 3.0 + part / 2.0); i < n_count; i++) {
-    if (i == best)
-      continue;
-    else if (i % optimum_task_split == 0) {
-      do_create_new(&mutThreads, copyfrom_copyTo, processor_count, nets, 0.03,
-                    0.3);
-      copyfrom_copyTo.clear();
-    } else
-      copyfrom_copyTo.push_back(std::pair<int, int>(best, i));
-  }
-
-  // do rest...
-  do_create_new(&mutThreads, copyfrom_copyTo, processor_count, nets, 0.01, 0.2);
-  copyfrom_copyTo.clear();
-
-  double diff_best_and_zero[3];
-  if (n_count >= 3) {
-    diff_best_and_zero[0] = nets[1]->getDifferenceFrom(nets[best]);
-    diff_best_and_zero[1] = nets[n_count - 1]->getDifferenceFrom(nets[best]);
-    diff_best_and_zero[2] =
-        nets[n_count / 2 + 1]->getDifferenceFrom(nets[best]);
-  }
-
-  if (useMutThreads)
-    for (unsigned i = 0; i < mutThreads.size(); i++) {
-      if (mutThreads.at(i).first.joinable()) {
-        mutThreads.at(i).first.join();
-        delete mutThreads.at(i).second;
-      }
+    tasks.push_back({static_cast<int>(bestIdx), static_cast<int>(i)});
+    if (tasks.size() >= taskSplitSize) {
+      dispatchMutation(mutThreads, tasks, threadCount, mutationRate,
+                       mutationRange);
+      tasks.clear();
     }
-  if (n_count >= 3) {
-    std::cout << "Evo: " << evolution << " Average mutation: [1] is "
-              << diff_best_and_zero[0] << ", [" << n_count - 1 << "] is "
-              << diff_best_and_zero[1] << ", [" << n_count / 2 + 1 << "] is "
-              << diff_best_and_zero[2] << " differned from best snake [" << best
-              << "] " << std::endl /*<< "INP: "*/;
-  } else
-    std::cout << "Evo: " << evolution << std::endl;
+  }
+
+  // Group 2: 12.5% — copy from best, low mutation
+  for (unsigned i = static_cast<unsigned>(3.0 * quarter);
+       i < static_cast<unsigned>(3.0 * quarter + quarter / 2.0); i++) {
+    unsigned num = indexDist(rng);
+    if (i == bestIdx || num == i)
+      continue;
+    tasks.push_back({static_cast<int>(bestIdx), static_cast<int>(i)});
+    if (tasks.size() >= taskSplitSize) {
+      dispatchMutation(mutThreads, tasks, threadCount, 0.01, 0.2);
+      tasks.clear();
+    }
+  }
+
+  // Group 3: 12.5% — copy from best, high mutation
+  for (unsigned i = static_cast<unsigned>(3.0 * quarter + quarter / 2.0);
+       i < populationSize; i++) {
+    if (i == bestIdx)
+      continue;
+    tasks.push_back({static_cast<int>(bestIdx), static_cast<int>(i)});
+    if (tasks.size() >= taskSplitSize) {
+      dispatchMutation(mutThreads, tasks, threadCount, 0.03, 0.3);
+      tasks.clear();
+    }
+  }
+
+  // Dispatch remaining tasks
+  if (!tasks.empty()) {
+    dispatchMutation(mutThreads, tasks, threadCount, 0.01, 0.2);
+    tasks.clear();
+  }
+
+  // Log mutation diversity
+  double diffs[3] = {};
+  if (populationSize >= 3) {
+    diffs[0] = nets[1]->getDifferenceFrom(nets[bestIdx]);
+    diffs[1] = nets[populationSize - 1]->getDifferenceFrom(nets[bestIdx]);
+    diffs[2] = nets[populationSize / 2 + 1]->getDifferenceFrom(nets[bestIdx]);
+  }
+
+  // Join all threads
+  for (auto &pair : mutThreads) {
+    if (pair.first.joinable()) {
+      pair.first.join();
+      delete pair.second;
+    }
+  }
+
+  if (populationSize >= 3) {
+    std::cout << "Evo: " << evolutionCount << " Avg mutation: [1]=" << diffs[0]
+              << ", [" << populationSize - 1 << "]=" << diffs[1] << ", ["
+              << populationSize / 2 + 1 << "]=" << diffs[2]
+              << " diff from best [" << bestIdx << "]" << std::endl;
+  } else {
+    std::cout << "Evo: " << evolutionCount << std::endl;
+  }
 }
 
-int *Population::scoreMap() { return scores; }
+// ---------------------------------------------------------------------------
+// Evolution with simulated annealing
+// ---------------------------------------------------------------------------
 
-void Population::evolveWithSimulatedAnnealing(const double mutation_rate,
-                                              const double mutation_range,
-                                              const double &temp_rate) {
-  if (n_count <= 0 || temp == 0) {
-    return perror("invalid input!");
+void Population::evolveWithSimulatedAnnealing(double mutationRate,
+                                              double mutationRange,
+                                              double temperatureDecay) {
+  if (populationSize == 0 || temperature == 0.0) {
+    std::cerr << "evolveWithSimulatedAnnealing(): invalid state" << std::endl;
+    return;
   }
 
   std::vector<std::pair<std::thread, std::atomic<bool> *>> mutThreads;
-  std::list<std::pair<int, int>> copyfrom_copyTo;
-  unsigned processor_count = optimalThreadCount();
+  std::vector<MutationTask> tasks;
+  unsigned threadCount = optimalThreadCount();
 
-  std::mt19937 igenerator(std::random_device{}());
-  std::uniform_int_distribution<int> idistribution(0, n_count - 1);
-  std::uniform_real_distribution<double> prop_dis(
-      0.0, 1.0); // uniform distribution [0, 1)
+  std::mt19937 rng(std::random_device{}());
+  std::uniform_int_distribution<unsigned> indexDist(0, populationSize - 1);
+  std::uniform_real_distribution<double> probDist(0.0, 1.0);
 
-  int optimum_task_split = ((n_count / (processor_count)) <= 0)
-                               ? (1)
-                               : (n_count / (processor_count));
+  unsigned taskSplitSize = std::max(1u, populationSize / threadCount);
 
-  this->evolution++;
-  this->temp = this->temp * temp_rate;
-  // std::swap(nets[0], nets[indexOfBest()]); // set index of best to 0
+  evolutionCount++;
+  temperature *= temperatureDecay;
+
   unsigned best = indexOfBest();
-  int last_best_mutated = -1;
-  int worseOneGenommen = 0;
+  int lastAcceptedWorse = -1;
+  int worseAcceptedCount = 0;
 
-  for (unsigned i = 0; i < n_count; i++) {
+  for (unsigned i = 0; i < populationSize; i++) {
     if (i != best) {
-      // if(i==0)
-      //     std::cout << "i=0: scores[i] >= scores[best]: " << scores[i]<< " >=
-      //     " <<  scores[best]  << std::endl;
-
       if (scores[i] >= scores[best]) {
-        // net is better or as good as best -> use it to mutate
-        copyfrom_copyTo.push_back(std::pair<int, int>(i, i));
-
-      } else if (scores[best]) {
+        // As good or better — keep and mutate in-place
+        tasks.push_back({static_cast<int>(i), static_cast<int>(i)});
+      } else if (scores[best] != 0) {
+        // Simulated annealing acceptance probability
         double probability =
-            std::exp(((scores[i] / scores[best]) - 1.0) /
-                     this->temp); // std::exp(- (( scores[best] - scores[i]) /
-                                  // this->temp));
-        // if(i==-1)
-        //     std::cout << "i=0: prob: " << prop_dis(igenerator) << " <?< " <<
-        //     probability << std::endl;
-        bool useWorseOne = prop_dis(igenerator) < probability;
-        if (useWorseOne) {
-          copyfrom_copyTo.push_back(std::pair<int, int>(i, i));
-          last_best_mutated = i;
-          worseOneGenommen++;
+            std::exp(((static_cast<double>(scores[i]) / scores[best]) - 1.0) /
+                     temperature);
+        if (probDist(rng) < probability) {
+          tasks.push_back({static_cast<int>(i), static_cast<int>(i)});
+          lastAcceptedWorse = i;
+          worseAcceptedCount++;
         } else {
-          copyfrom_copyTo.push_back(std::pair<int, int>(best, i));
+          tasks.push_back({static_cast<int>(best), static_cast<int>(i)});
         }
       }
     }
-    // start part
-    if (i % optimum_task_split == 0 || i == n_count - 1) {
-      do_create_new(&mutThreads, copyfrom_copyTo, processor_count, nets,
-                    mutation_rate * temp, mutation_range);
-      copyfrom_copyTo.clear();
+
+    // Dispatch when batch is full or at end
+    if (tasks.size() >= taskSplitSize || i == populationSize - 1) {
+      if (!tasks.empty()) {
+        dispatchMutation(mutThreads, tasks, threadCount,
+                         mutationRate * temperature, mutationRange);
+        tasks.clear();
+      }
     }
   }
 
-  if (useMutThreads)
-    for (unsigned i = 0; i < mutThreads.size(); i++) {
-      if (mutThreads.at(i).first.joinable()) {
-        mutThreads.at(i).first.join();
-        delete mutThreads.at(i).second;
-      }
+  // Join all threads
+  for (auto &pair : mutThreads) {
+    if (pair.first.joinable()) {
+      pair.first.join();
+      delete pair.second;
     }
+  }
 
-  if (last_best_mutated >= 0 && last_best_mutated < (int)n_count) {
-    std::cout << " Average mutation: [best] to [mutated_best] is "
-              << nets[last_best_mutated]->getDifferenceFrom(nets[best])
+  // Logging
+  if (lastAcceptedWorse >= 0 &&
+      lastAcceptedWorse < static_cast<int>(populationSize)) {
+    std::cout << " Avg mutation: [best] to [acceptedWorse] = "
+              << nets[lastAcceptedWorse]->getDifferenceFrom(nets[best])
               << std::endl;
   }
-  std::cout << " Temperature: " << this->temp
-            << " | Nimmt Netz zu 50% NICHT! wenn Score "
-            << this->temp * (std::log(0.5) + 1.0)
-            << " % von MaxScore = " << scores[best] << ", also "
-            << (this->temp * (std::log(0.5) + 1.0)) * (double)scores[best]
-            << " erreicht!" /*temp*std::log(0.5)*/ << std::endl;
-  std::cout << " worseOneGenommen-Percentage: "
-            << (int)(100.0 * (double)worseOneGenommen / (double)n_count)
-            << " % --> abs: " << worseOneGenommen << std::endl;
-  std::cout << " current mut rate: " << temp * mutation_rate << std::endl;
-
-  std::cout << "Finished Evolution: " << evolution << std::endl;
+  std::cout << " Temperature: " << temperature << " | 50% rejection threshold: "
+            << temperature * (std::log(0.5) + 1.0)
+            << " % of MaxScore=" << scores[best] << ", i.e. "
+            << (temperature * (std::log(0.5) + 1.0)) * scores[best]
+            << std::endl;
+  std::cout << " Worse-accepted: "
+            << static_cast<int>(100.0 * worseAcceptedCount / populationSize)
+            << "% (" << worseAcceptedCount << ")" << std::endl;
+  std::cout << " Effective mutation rate: " << temperature * mutationRate
+            << std::endl;
+  std::cout << "Finished evolution: " << evolutionCount << std::endl;
 }
 
-double Population::getTemperature() { return temp; }
+// ---------------------------------------------------------------------------
+// Thread dispatch
+// ---------------------------------------------------------------------------
 
-void Population::setTemperature(const double &t) { temp = t; }
+void Population::dispatchMutation(
+    std::vector<std::pair<std::thread, std::atomic<bool> *>> &threads,
+    const std::vector<MutationTask> &tasks, unsigned maxThreads, double mutRate,
+    double mutRange) {
+  if (tasks.empty())
+    return;
 
-unsigned int Population::getEvolutionNum() const { return evolution; }
-
-Net *Population::netAt(const unsigned int &index) { return nets[index]; }
-
-// unsigned int Population::getBest() const
-// {
-//     return best;
-// }
-
-void Population::do_create_new(
-    std::vector<std::pair<std::thread, std::atomic<bool> *>> *mutThreads,
-    const std::list<std::pair<int, int>> copyfrom_copyTo,
-    const unsigned int thread_max_count, Net **nets, const double &mut_rate,
-    const double &range) {
-  if (useMutThreads) {
-    std::cout << "[ " << copyfrom_copyTo.back().second << " / " << n_count
-              << " ]" << mutThreads->size() << " / " << thread_max_count
-              << " Threads: waiting until next finishes..." << std::endl;
-
-    while (mutThreads->size() >= thread_max_count) {
-      for (unsigned i = 0; i < mutThreads->size(); i++) {
-        if (*mutThreads->at(i).second) {
-          if (mutThreads->at(i).first.joinable()) {
-            mutThreads->at(i).first.join();
-            // delete atomic var
-            delete mutThreads->at(i).second;
-            mutThreads->erase(mutThreads->begin() + i);
-            i--;
-          }
+  if (useThreads) {
+    // Wait until a thread slot is available
+    while (threads.size() >= maxThreads) {
+      for (auto it = threads.begin(); it != threads.end();) {
+        if (*it->second) {
+          if (it->first.joinable())
+            it->first.join();
+          delete it->second;
+          it = threads.erase(it);
+        } else {
+          ++it;
         }
       }
-      if (mutThreads->size() < thread_max_count)
-        break;
-      else {
-        // std::cout << "usleep(50000)" << std::endl;
-        usleep(50000);
-      }
+      if (threads.size() >= maxThreads)
+        sleepMs(50);
     }
-    std::atomic<bool> *isFinished = new std::atomic<bool>(false);
-    mutThreads->push_back(std::pair<std::thread, std::atomic<bool> *>(
-        std::thread(this->mutateThread, nets, copyfrom_copyTo, mut_rate, range,
-                    isFinished),
-        isFinished));
+
+    auto *finished = new std::atomic<bool>(false);
+    threads.emplace_back(std::thread(executeMutation, nets.get(), tasks,
+                                     mutRate, mutRange, finished),
+                         finished);
   } else {
-    mutateThread(nets, copyfrom_copyTo, mut_rate, range);
+    executeMutation(nets.get(), tasks, mutRate, mutRange);
   }
 }
 
-void Population::mutateThread(
-    Net **nets, const std::list<std::pair<int, int>> copyfrom_copyTo,
-    const double mut_rate, const double range, std::atomic_bool *is_finished) {
-  for (auto it = copyfrom_copyTo.begin(); it != copyfrom_copyTo.end(); ++it) {
-    if (!nets[it->second]->createCopyFrom(nets[it->first]))
-      perror("Create copy failed failed!");
+void Population::executeMutation(Net **nets,
+                                 const std::vector<MutationTask> &tasks,
+                                 double mutRate, double mutRange,
+                                 std::atomic<bool> *finished) {
+  for (const auto &task : tasks) {
+    if (!nets[task.targetIdx]->createCopyFrom(nets[task.sourceIdx]))
+      std::cerr << "createCopyFrom failed: " << task.sourceIdx << " -> "
+                << task.targetIdx << std::endl;
     else
-      nets[it->second]->mutate(mut_rate, range);
-    // std::cout << " COPIED: net[" << it->first << "] to net[" << it->second <<
-    // "] and mutated [" << it->second << "]" << std::endl;
+      nets[task.targetIdx]->mutate(mutRate, mutRange);
   }
-  if (is_finished)
-    *is_finished = true;
+  if (finished)
+    *finished = true;
 }
