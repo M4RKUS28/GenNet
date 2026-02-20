@@ -1,149 +1,144 @@
 #include "agent.h"
 
-Agent::Agent(std::string netTop, double gamma, double epsilon, unsigned int batchSize)
-    :   Agent(new Net(netTop), gamma, epsilon, batchSize)
-{
+Agent::Agent(std::string netTop, double gamma, double epsilon,
+             unsigned int batchSize, unsigned targetSyncInterval)
+    : Agent(new Net(netTop), gamma, epsilon, batchSize, targetSyncInterval) {}
 
+Agent::Agent(Net *net, double gamma, double epsilon, unsigned int batchSize,
+             unsigned targetSyncInterval)
+    : net(net), targetNet(new Net(net)), batchSize(batchSize), gamma(gamma),
+      epsilon(epsilon), targetSyncInterval(targetSyncInterval) {}
+
+Agent::~Agent() {
+  delete net;
+  delete targetNet;
 }
 
-Agent::Agent(Net *net, double gamma, double epsilon, unsigned int batchSize)
-{
-    this->net = net;
-    this->batchSize = batchSize;
-    this->gamma = gamma;
-    this->epsilon = epsilon;
+void Agent::remember(const MEM_ENTRY &mem) {
+  memory.push_back(mem);
+  while (memory.size() > maxMemSize)
+    memory.pop_front();
 }
 
-
-void Agent::remember(const MEM_ENTRY &mem)
-{
-    memory.push_back(mem);
-    //resize
-    while(memory.size() > 0 && memory.size() > maxMemSize)
-        memory.pop_front();
+static int argmax(const Action &vec) {
+  if (vec.empty())
+    return -1;
+  return static_cast<int>(
+      std::distance(vec.begin(), std::max_element(vec.begin(), vec.end())));
 }
 
-int argmax(const Action& vec) {
-    if (vec.empty()) {
-        // Handle the case where the vector is empty
-        return -1; // or any other appropriate value
-    }
+double *Agent::targetValue(const MEM_ENTRY &mem) {
+  int size = net->getTopology().back().neuronCount;
+  double *retVal = new double[size];
 
-    // Use std::max_element to find the iterator pointing to the maximum element
-    auto maxElementIterator = std::max_element(vec.begin(), vec.end());
+  // Step 1: Get current Q-values for the state
+  net->feedForward(mem.state.data());
+  net->getResults(retVal);
 
-    // Check if maxElementIterator is valid before getting the index
-    if (maxElementIterator != vec.end()) {
-        // Calculate the index by subtracting the beginning iterator
-        int index = std::distance(vec.begin(), maxElementIterator);
-        return index;
-    } else {
-        // Handle the case where the vector is empty or other specific conditions
-        return -1; // or any other appropriate value
-    }
-}
+  // Step 2: Compute Q_new from target network (stable targets)
+  double Q_new = mem.reward;
+  if (!mem.done) {
+    double *predic = new double[size];
 
+    // Use TARGET network for next-state Q-value estimation
+    targetNet->feedForward(mem.nextState.data());
+    targetNet->getResults(predic);
 
-double *Agent::targetValue(const MEM_ENTRY &mem)
-{
-    int size = net->getTopology().back().neuronCount;
-    double * retVal = new double[size];
-    double * predic = new double[size];
-
-    net->feedForward(mem.state.data());
-    net->getResults(retVal);
-    std::cout << " PREDICT: " << retVal[0] << " - " << retVal[1] << " - " << retVal[2] << " - " << retVal[3] << std::endl;
-
-    double Q_new = mem.reward; // reward[idx]
-    if(!mem.done) {
-        net->feedForward(mem.nextState.data());
-        net->getResults(predic);
-        double max = *std::max_element(predic, predic + size);
-        Q_new = mem.reward + this->gamma * max;
-    }
-    std::cout << " argmax(mem.action): " << argmax(mem.action) << std::endl;
-
-    retVal[argmax(mem.action)] = Q_new;
-
+    double max = *std::max_element(predic, predic + size);
+    Q_new = mem.reward + gamma * max;
     delete[] predic;
-    std::cout << " TARGET: " << retVal[0] << " - " << retVal[1] << " - " << retVal[2] << " - " << retVal[3] << std::endl;
+  }
 
-    return retVal;
+  // Step 3: Set the target for the taken action
+  int actionIdx = argmax(mem.action);
+  if (actionIdx >= 0 && actionIdx < size)
+    retVal[actionIdx] = Q_new;
+
+  // Step 4: Re-feedforward the ORIGINAL state so that backProp
+  //         computes gradients for the correct activations
+  net->feedForward(mem.state.data());
+
+  return retVal;
 }
 
-void Agent::addStep(State lastState, State newState, Action action, double reward, bool done)
-{
-    MEM_ENTRY memEntr(lastState, action, reward, newState, done);
-    this->train_short_memory(memEntr);
-    this->remember(memEntr);
-    if(done)
-        this->train_long_memory();
+void Agent::addStep(State lastState, State newState, Action action,
+                    double reward, bool done) {
+  MEM_ENTRY memEntr(lastState, action, reward, newState, done);
+  train_short_memory(memEntr);
+  remember(memEntr);
+
+  if (done) {
+    n_games++;
+    train_long_memory();
+  }
 }
 
+Action Agent::getAction(const State &state) {
+  int size = net->getTopology().back().neuronCount;
+  Action final_move(size, 0);
 
-Action Agent::getAction(const State &state)
-{
-    // random moves: tradeoff exploration / exploitation
-    epsilon = 80 - /*n_games*/ 0;
-    Action final_move;
-    int size = net->getTopology().back().neuronCount;
+  // Epsilon-greedy with decay: epsilon decreases as n_games grows
+  double current_epsilon = epsilon - static_cast<double>(n_games);
+  if (current_epsilon < 0.0)
+    current_epsilon = 0.0;
 
-    for(int i = 0; i < size; i++)
-        final_move.push_back(0);
+  if (std::rand() % 201 < static_cast<int>(current_epsilon)) {
+    // Random exploration
+    int move = std::rand() % size;
+    final_move[move] = 1;
+  } else {
+    // Exploitation: pick best action from policy network
+    double *rawData = new double[size];
+    net->feedForward(state.data());
+    net->getResults(rawData);
 
-    if (std::rand() % 201 < epsilon) {
-        int move = std::rand() % 3;
-        final_move[move] = 1;
-        std::cout << "GET RANDOM" << std::endl;
-    } else {
-        double* rawData = new double[size];
-        net->feedForward(state.data());
-        net->getResults(rawData);
-        std::vector<double> prediction;
-        for(int i = 0; i < size; i++)
-            prediction.push_back(rawData[i]);
-        delete[] rawData;
-
-        int move = std::distance(prediction.begin(), std::max_element(prediction.begin(), prediction.end()));
-        final_move[move] = 1;
+    int move = 0;
+    for (int i = 1; i < size; i++) {
+      if (rawData[i] > rawData[move])
+        move = i;
     }
+    delete[] rawData;
+    final_move[move] = 1;
+  }
 
-    std::cout << " GET ACTION: " << final_move[0] << " - " << final_move[1] << " - " << final_move[2] << " - " << final_move[3] << std::endl;
-
-    return final_move;
+  return final_move;
 }
 
-void Agent::train_short_memory(const MEM_ENTRY &mem)
-{
-    double * targetVal = targetValue(mem);
-    net->backProp(targetVal, 0.01, 0.15, false);
-    // delete[] targetVal;
+void Agent::train_short_memory(const MEM_ENTRY &mem) {
+  double *targetVal = targetValue(mem);
+  net->backProp(targetVal, 0.01, 0.15, false);
+  delete[] targetVal;
+
+  totalTrainSteps++;
+  if (totalTrainSteps % targetSyncInterval == 0)
+    syncTargetNet();
 }
 
+void Agent::train_long_memory() {
+  std::deque<MEM_ENTRY> sampleDeque = memory;
 
-void Agent::train_long_memory()
-{
-    // Create a copy of the input deque
-    std::deque<MEM_ENTRY> sampleDeque = memory;
+  std::random_device rd;
+  std::mt19937 gen(rd());
 
-    // Use a random device and a random number generator to generate random indices
-    std::random_device rd;
-    std::mt19937 gen(rd());
+  for (std::size_t i = 0; i < batchSize && !sampleDeque.empty(); ++i) {
+    std::size_t randomIndex = std::uniform_int_distribution<std::size_t>(
+        0, sampleDeque.size() - 1)(gen);
 
-    // Iterate SIZE times and select random elements <<>> if there are still elements in the deque
-    for (std::size_t i = 0; i < batchSize && sampleDeque.size(); ++i) {
-        // Generate a random index within the remaining range of the deque
-        std::size_t randomIndex = std::uniform_int_distribution<std::size_t>(0, sampleDeque.size() - 1)(gen);
+    double *targetVal = targetValue(sampleDeque[randomIndex]);
+    net->backProp(targetVal, 0.01, 0.15, true);
+    delete[] targetVal;
 
-        double * targetVal = targetValue(sampleDeque[randomIndex]);
-        net->backProp(targetVal, 0.01, 0.15, true);
-        // delete[] targetVal;
+    sampleDeque.erase(sampleDeque.begin() + randomIndex);
+  }
 
-        // Remove the sampled element to avoid duplicate selections
-        sampleDeque.erase(sampleDeque.begin() + randomIndex);
-    }
+  net->applyBatch();
 
-    net->applyBatch();
-    std::cout << "recentAverrageError(): " << net->recentAverrageError() << std::endl;
+  totalTrainSteps++;
+  if (totalTrainSteps % targetSyncInterval == 0)
+    syncTargetNet();
+}
 
+void Agent::syncTargetNet() {
+  if (targetNet && net)
+    targetNet->createCopyFrom(net);
 }
