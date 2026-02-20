@@ -1,173 +1,123 @@
 # GenNet
 
-A lightweight, **Qt-free** C++17 neural network library for building, training, and evolving feedforward neural networks. Designed for real-time applications like game AI (e.g. SnakeIO).
+A lightweight, **Qt-free** C++17 neural network library for building, training, and evolving feedforward neural networks. Designed for real-time applications like game AI.
 
 ## Features
 
-- **Flexible Topology** — Define networks via string notation or programmatically with per-layer activation and aggregation functions
+- **Flexible Topology** — Define networks via string notation with per-layer activation and aggregation functions
 - **Backpropagation** — Gradient-based training with configurable learning rate (η) and momentum (α)
-- **Batch Learning** — Accumulate gradients over multiple samples before applying weight updates
-- **Genetic Evolution** — Mutate networks and evolve populations with elitism-based selection
-- **Simulated Annealing** — Temperature-controlled evolution accepting worse solutions probabilistically
-- **Multi-threaded Mutation** — Parallel mutation across CPU cores for large populations
-- **DQN Agent** — Deep Q-Network agent with experience replay memory for reinforcement learning
-- **Save / Load** — Serialize and deserialize networks to CSV files
-- **No Dependencies** — Pure C++ standard library, no Qt or external frameworks required
+- **Batch Learning** — Accumulate gradients before applying weight updates
+- **Genetic Evolution** — Mutate and evolve populations with elitism or simulated annealing
+- **DQN Agent** — Deep Q-Network with experience replay and target network
+- **Multi-threaded** — Parallel mutation for large populations
+- **Save / Load** — Serialize networks to CSV
+- **No Dependencies** — Pure C++17 standard library
 
 ## Architecture
 
 ```
 GenNet/
-└── src/
-    ├── neuron.h/cpp      # Neuron with activation & aggregation functions
-    ├── net.h/cpp          # Neural network (feedforward, backprop, mutation, I/O)
-    ├── population.h/cpp   # Population management & evolutionary algorithms
-    └── agent.h/cpp        # DQN reinforcement learning agent
+├── src/
+│   ├── fastrandom.h       # xorshift128+ PRNG (fast, thread-safe)
+│   ├── neuron.h/cpp       # Neuron: activation, aggregation, mutation
+│   ├── net.h/cpp          # Net: feedforward, backprop, save/load
+│   ├── population.h/cpp   # Population: genetic evolution
+│   └── agent.h/cpp        # DQN reinforcement learning agent
+└── docs/
+    ├── Net.md             # Detailed Net documentation
+    ├── Population.md      # Evolution strategies & API
+    └── Agent.md           # DQN architecture & API
 ```
 
-## Topology Format
+## Quick Start
 
-Networks are defined as comma-separated layers. Each layer follows the format:
-
-```
-<neuronCount>_<aggregation>_<activation>
-```
-
-The input layer uses the shorthand `<neuronCount>_INPUT`.
-
-**Example:** `24_INPUT,16_SUM_RELU,4_SUM_TANH`
-
-This creates a network with:
-
-- 24 input neurons
-- 16 hidden neurons (SUM aggregation, ReLU activation)
-- 4 output neurons (SUM aggregation, Tanh activation)
-
-### Aggregation Functions
-
-| Name    | Description                  |
-| ------- | ---------------------------- |
-| `SUM`   | Weighted sum of inputs       |
-| `AVG`   | Average of weighted inputs   |
-| `MAX`   | Maximum of weighted inputs   |
-| `MIN`   | Minimum of weighted inputs   |
-| `INPUT` | Input layer (no aggregation) |
-
-### Activation Functions
-
-| Name        | Description                  |
-| ----------- | ---------------------------- |
-| `TANH`      | Hyperbolic tangent           |
-| `RELU`      | Rectified Linear Unit        |
-| `LEAKYRELU` | Leaky ReLU                   |
-| `SIGMOID`   | Logistic sigmoid             |
-| `SMAX`      | Softmax (numerically stable) |
-| `SOFTPLUS`  | Smooth approximation of ReLU |
-| `IDENTITY`  | Linear / no activation       |
-| `NONE`      | No activation applied        |
-
-## Usage
-
-### Creating a Network
+### Create & Train a Network
 
 ```cpp
 #include "net.h"
 
-// From topology string
-Net net("24_INPUT,16_SUM_RELU,4_SUM_TANH");
+Net net("4_INPUT,8_SUM_RELU,2_SUM_IDENTITY");
 
-// From file
-bool ok;
-Net loaded("model.csv", ok);
-```
+double input[4]  = {1.0, 0.5, -0.3, 0.8};
+double target[2] = {1.0, 0.0};
 
-### Feedforward & Training
-
-```cpp
-double input[24] = { /* ... */ };
-double target[4] = { /* ... */ };
-
+// Forward pass
 net.feedForward(input);
-
-double output[4];
+double output[2];
 net.getResults(output);
 
-// Backpropagation (eta=0.15, alpha=0.05)
+// Train (learning rate=0.15, momentum=0.05)
 net.backProp(target, 0.15, 0.05);
 ```
 
-### Batch Learning
+### Topology Format
 
-```cpp
-Net net("3_INPUT,5_SUM_RELU,2_SUM_SIGMOID", 0.01, true);
+Networks are defined as comma-separated layers: `<count>_<aggregation>_<activation>`
 
-for (auto& sample : dataset) {
-    net.feedForward(sample.input);
-    net.backProp(sample.target, 0.15, 0.05, true);  // accumulate
-}
-net.applyBatch();  // apply accumulated gradients
 ```
+24_INPUT,16_SUM_RELU,4_SUM_TANH
+   │         │   │        │   └─ activation
+   │         │   │        └─── aggregation
+   │         │   └──────────── neuron count
+   │         └──────────────── hidden layer
+   └────────────────────────── input layer (shorthand)
+```
+
+**Aggregation:** `SUM`, `AVG`, `MAX`, `MIN`, `INPUT`
+**Activation:** `TANH`, `RELU`, `LEAKYRELU`, `SIGMOID`, `SMAX`, `SOFTPLUS`, `IDENTITY`, `NONE`
+
+→ See [docs/Net.md](docs/Net.md) for full API reference and file format.
 
 ### Genetic Evolution
 
 ```cpp
 #include "population.h"
 
-// Create population of 100 networks
 Population pop("24_INPUT,16_SUM_RELU,4_SUM_TANH", 100);
 
-// Evaluate fitness...
+// Evaluate fitness
 int* scores = pop.scoreMap();
-for (unsigned i = 0; i < 100; i++) {
+for (unsigned i = 0; i < pop.getSize(); i++)
     scores[i] = evaluate(pop.netAt(i));
-}
 
-// Evolve: keep best, mutate rest
-pop.evolve(bestIndex, 0.1, 0.2);
+// Evolve
+pop.evolve(bestIdx, 0.1, 0.2);
 
-// Or use simulated annealing
+// Or with simulated annealing
 pop.evolveWithSimulatedAnnealing(0.1, 0.2, 0.95);
 ```
 
-### DQN Agent
+→ See [docs/Population.md](docs/Population.md) for evolution strategies and multi-threading.
+
+### DQN Reinforcement Learning
 
 ```cpp
 #include "agent.h"
 
-Agent agent("4_INPUT,64_SUM_RELU,2_SUM_IDENTITY", 0.99, 0.1, 1000);
+Agent agent("11_INPUT,256_SUM_RELU,3_SUM_IDENTITY");
 
-// Game loop
-State state = env.reset();
+State state = getState();
 Action action = agent.getAction(state);
 auto [nextState, reward, done] = env.step(action);
-
 agent.addStep(state, nextState, action, reward, done);
-
-// Train
-agent.train_long_memory();
 ```
 
-### Save & Load
-
-```cpp
-net.save_to("model.csv");
-net.load_from("model.csv");
-```
+→ See [docs/Agent.md](docs/Agent.md) for DQN architecture, hyperparameters, and feature status.
 
 ## Build
 
-GenNet builds as a **static library** using qmake (without Qt dependencies):
+GenNet builds as a **static library** using qmake (no Qt dependency):
 
 ```bash
 qmake GenNet.pro
 make
 ```
 
-The output is `libGenNet.a` which can be linked into any C++ project.
+Output: `libGenNet.a`
 
 ### Integration
 
-Add to your project's `.pro` file:
+Add to your `.pro` file:
 
 ```qmake
 LIBS += -L$$PWD/../GenNet/release -lGenNet
