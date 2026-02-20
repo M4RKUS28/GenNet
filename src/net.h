@@ -3,72 +3,76 @@
 
 #include "neuron.h"
 
-#include <vector>
 #include <assert.h>
+#include <fstream>
 #include <iostream>
 #include <sstream>
-#include <fstream>
+#include <vector>
 
+typedef Neuron **Layer;
 
-typedef Neuron** Layer;
-
-class Net
-{
+class Net {
 public:
-    Net(const std::string &topology, const double &init_range = 0.01, const bool & enable_batch_learning = true);
-    Net(const std::vector<LayerType> &topology, const double &init_range = 0.01, const bool & enable_batch_learning = true);
-    Net(const Net *other, const double &init_range = 0.01, const bool & enable_batch_learning = true);
-    Net(const std::string filename, bool &ok, const bool & enable_batch_learning = true);
-    ~Net();
+  Net(const std::string &topology, const double &init_range = 0.01,
+      const bool &enable_batch_learning = true);
+  Net(const std::vector<LayerType> &topology, const double &init_range = 0.01,
+      const bool &enable_batch_learning = true);
+  Net(const Net *other, const double &init_range = 0.01,
+      const bool &enable_batch_learning = true);
+  Net(const std::string filename, bool &ok,
+      const bool &enable_batch_learning = true);
+  ~Net();
 
-    //load store net -> iofstreams
-    bool save_to(const std::string &path);
-    bool load_from(const std::string &path, const bool & enable_batch_learning = true);
+  // load store net -> iofstreams
+  bool save_to(const std::string &path);
+  bool load_from(const std::string &path,
+                 const bool &enable_batch_learning = true);
 
-    //topology stuff
-    std::vector<LayerType> getTopology() const;
-    static std::vector<LayerType> getTopologyFromStr(const std::string & top);
-    std::string getTopologyStr() const;
+  // topology stuff
+  std::vector<LayerType> getTopology() const;
+  static std::vector<LayerType> getTopologyFromStr(const std::string &top);
+  std::string getTopologyStr() const;
 
-    //net main functions:
-    //<<In
-    void feedForward(const double *input);
-    //>>out
-    void getResults(double *output) const;
-    //~optimizer
-    void backProp(double * targetVals, const double &eta, const double &alpha, const bool &batchLearning = false);
-    void applyBatch();
-    void mutate(const double & mutation_rate, const double & mutation_range = 1.0 );
+  // net main functions:
+  //<<In
+  void feedForward(const double *input);
+  //>>out
+  void getResults(double *output) const;
+  //~optimizer
+  void backProp(double *targetVals, const double &eta, const double &alpha,
+                const bool &batchLearning = false);
+  void applyBatch();
+  void mutate(const double &mutation_rate, const double &mutation_range = 1.0);
 
-    //make copy from other
-    bool createCopyFrom(const Net *origin);
+  // make copy from other
+  bool createCopyFrom(const Net *origin);
 
-    // get Difference from other net
+  // get Difference from other net
 
-    double getDifferenceFromOtherNet(const Net * other);
+  double getDifferenceFromOtherNet(const Net *other);
 
-    //get infos
-    double getConWeight(const unsigned int &layer, const unsigned int &neuronFrom, const unsigned int &neuronTo) const;
-    double getNeuronValue(const unsigned int &layer, const unsigned int &neuron) const;
+  // get infos
+  double getConWeight(const unsigned int &layer, const unsigned int &neuronFrom,
+                      const unsigned int &neuronTo) const;
+  double getNeuronValue(const unsigned int &layer,
+                        const unsigned int &neuron) const;
 
-    double recentAverrageError() const;
+  double recentAverrageError() const;
 
 private:
-    unsigned layerCount() const;
-    unsigned neuronCountAt(const unsigned &layer) const;
+  unsigned layerCount() const;
+  unsigned neuronCountAt(const unsigned &layer) const;
 
-    Layer* m_layers;
-    std::vector<LayerType> topology;
+  Layer *m_layers;
+  std::vector<LayerType> topology;
 
-    double m_error;
-    double m_recentAverangeSmoothingFactor;
-    double m_recentAverrageError;
+  double m_error;
+  double m_recentAverangeSmoothingFactor;
+  double m_recentAverrageError;
 
 protected:
-    void init(const double &init_range = 1.0, const bool &enable_batch_learning = true);
+  void init(const double &init_range = 1.0,
+            const bool &enable_batch_learning = true);
 };
-
-
-
 
 #endif // NET_H
